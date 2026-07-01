@@ -17,6 +17,7 @@ class TranscriptEvent:
     name: str
     session_id: str
     timestamp: str | None = None
+    metadata: dict | None = None  # For Read tool calls: file_path, offset, limit, manual_reference
 
 
 @dataclass
@@ -31,6 +32,41 @@ class UsageRecord:
 
 
 @dataclass
+class Section:
+    """Represents a section within a guidance file."""
+    title: str
+    start_line: int
+    end_line: int
+    content: str
+    usage_count: int = 0
+    sessions_used: set[str] = field(default_factory=set)
+    token_estimate: int = 0  # Rough token count
+
+
+@dataclass
+class SectionUsageRecord:
+    """Usage statistics for a specific section."""
+    section_title: str
+    line_range: str  # e.g., "32-45"
+    usage_count: int
+    usage_percentage: float  # % of total artifact invocations
+    token_estimate: int
+    is_dead: bool  # True if never used
+
+
+@dataclass
+class ArtifactSectionReport:
+    """Section-level coverage for a single artifact."""
+    artifact_name: str
+    artifact_kind: str
+    file_path: str
+    total_invocations: int
+    sections: list[SectionUsageRecord] = field(default_factory=list)
+    dead_section_count: int = 0
+    token_waste_estimate: int = 0  # Tokens in unused sections
+
+
+@dataclass
 class CoverageReport:
     repo_path: str
     analyzed_at: str
@@ -40,3 +76,4 @@ class CoverageReport:
     dead_artifacts: list[str] = field(default_factory=list)
     coverage_percent: float = 0.0
     usage: list[UsageRecord] = field(default_factory=list)
+    section_reports: list[ArtifactSectionReport] = field(default_factory=list)  # New: section-level data

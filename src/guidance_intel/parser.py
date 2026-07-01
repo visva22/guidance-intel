@@ -87,7 +87,93 @@ def _parse_claude_code_line(line: str, session_id: str) -> TranscriptEvent | Non
         if wf_name:
             return TranscriptEvent(kind="workflow", name=wf_name, session_id=session_id, timestamp=timestamp)
 
+    elif tool_name == "Read":
+        # Track Read tool calls to guidance files (manual skill/agent reference)
+        file_path = tool_input.get("file_path", "")
+        if file_path and _is_guidance_file(file_path):
+            # Extract artifact name from path
+            artifact_name = _extract_artifact_name_from_path(file_path)
+            kind = _detect_guidance_kind(file_path)
+
+            # Store with metadata about the read
+            metadata = {
+                "file_path": file_path,
+                "offset": tool_input.get("offset"),
+                "limit": tool_input.get("limit"),
+                "manual_reference": True,  # Flag as manual, not tool invocation
+            }
+
+            return TranscriptEvent(
+                kind=kind,
+                name=artifact_name,
+                session_id=session_id,
+                timestamp=timestamp,
+                metadata=metadata
+            )
+
     return None
+
+
+def _is_guidance_file(file_path: str) -> bool:
+    """Check if file path points to a guidance artifact."""
+    path_lower = file_path.lower()
+
+    # Skills
+    if "/skills/" in path_lower and file_path.endswith(".md"):
+        return True
+
+    # Agents
+    if file_path.endswith("AGENTS.md"):
+        return True
+    if "/agents/" in path_lower and file_path.endswith(".md"):
+        return True
+
+    # Workflows
+    if "/workflows/" in path_lower and any(file_path.endswith(ext) for ext in [".yaml", ".yml", ".md", ".json"]):
+        return True
+
+    # Instructions
+    if any(file_path.endswith(name) for name in ["CLAUDE.md", "INSTRUCTIONS.md", "AI_INSTRUCTIONS.md"]):
+        return True
+
+    return False
+
+
+def _extract_artifact_name_from_path(file_path: str) -> str:
+    """Extract artifact name from file path."""
+    from pathlib import Path
+    p = Path(file_path)
+
+    # For SKILL.md, use parent directory name
+    if p.name == "SKILL.md":
+        return p.parent.name
+
+    # For other .md files in skills/, use filename
+    if "/skills/" in file_path:
+        return p.stem
+
+    # For agents/, use filename
+    if "/agents/" in file_path:
+        return p.stem
+
+    # For workflows/, use filename
+    if "/workflows/" in file_path:
+        return p.stem
+
+    # Default to stem
+    return p.stem
+
+
+def _detect_guidance_kind(file_path: str) -> str:
+    """Detect whether file is skill, agent, workflow, or instruction."""
+    if "/skills/" in file_path.lower() or "prompts/" in file_path.lower():
+        return "skill"
+    elif "/agents/" in file_path.lower() or file_path.endswith("AGENTS.md"):
+        return "agent"
+    elif "/workflows/" in file_path.lower() or "/tools/" in file_path.lower():
+        return "workflow"
+    else:
+        return "instruction"
 
 
 def _parse_generic_file(path: str, session_id: str) -> list[TranscriptEvent]:
