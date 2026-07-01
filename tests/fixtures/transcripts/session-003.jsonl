@@ -1,0 +1,4 @@
+{"type": "tool_use", "name": "Skill", "input": {"skill": "graphify"}, "timestamp": "2026-06-28T09:00:00Z"}
+{"type": "tool_use", "name": "Agent", "input": {"subagent_type": "Explore", "prompt": "find test files"}, "timestamp": "2026-06-28T09:01:00Z"}
+{"type": "tool_use", "name": "Skill", "input": {"skill": "code-review"}, "timestamp": "2026-06-28T09:05:00Z"}
+{"type": "tool_use", "name": "Read", "input": {"file_path": "README.md"}, "timestamp": "2026-06-28T09:06:00Z"}

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "guidance-intel"
+version = "0.1.0"
+description = "Code coverage for your AI guidance files. Find which Skills, Agents, and Workflows are actually used."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "Guidance Intelligence Contributors" },
+]
+keywords = ["ai", "claude", "skills", "agents", "coverage", "guidance", "evaluation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "click>=8.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[project.scripts]
+gi = "guidance_intel.cli:cli"
+
+[project.urls]
+Homepage = "https://github.com/anthropics/guidance-intel"
+Repository = "https://github.com/anthropics/guidance-intel"
+Issues = "https://github.com/anthropics/guidance-intel/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/guidance_intel"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["guidance_intel"]
