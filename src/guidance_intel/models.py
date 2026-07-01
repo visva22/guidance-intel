@@ -67,6 +67,17 @@ class ArtifactSectionReport:
 
 
 @dataclass
+class ExclusionViolation:
+    """Represents AI reading a file marked as excluded."""
+    file_path: str
+    exclusion_reason: str
+    access_count: int
+    sessions: list[str]
+    token_estimate: int
+    total_token_waste: int
+
+
+@dataclass
 class CoverageReport:
     repo_path: str
     analyzed_at: str
@@ -76,4 +87,5 @@ class CoverageReport:
     dead_artifacts: list[str] = field(default_factory=list)
     coverage_percent: float = 0.0
     usage: list[UsageRecord] = field(default_factory=list)
-    section_reports: list[ArtifactSectionReport] = field(default_factory=list)  # New: section-level data
+    section_reports: list[ArtifactSectionReport] = field(default_factory=list)  # Section-level data
+    exclusion_violations: list[ExclusionViolation] = field(default_factory=list)  # Exclusion violations

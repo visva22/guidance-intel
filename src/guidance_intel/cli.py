@@ -21,7 +21,8 @@ def cli():
 @click.option("--format", "fmt", type=click.Choice(["terminal", "json", "md"]), default="terminal")
 @click.option("--last", default=None, type=int, help="Analyze only the last N sessions.")
 @click.option("--sections", is_flag=True, help="Include section-level coverage analysis (shows token waste).")
-def coverage(repo, transcripts, fmt, last, sections):
+@click.option("--violations", is_flag=True, help="Check for exclusion violations (AI reading non-AI files).")
+def coverage(repo, transcripts, fmt, last, sections, violations):
     """Analyze guidance coverage across agent sessions."""
     repo = os.path.abspath(repo)
 
@@ -44,7 +45,7 @@ def coverage(repo, transcripts, fmt, last, sections):
     if not events and transcripts:
         events = parse_generic_jsonl(transcript_paths)
 
-    report = compute_coverage(artifacts, events, repo, include_sections=sections)
+    report = compute_coverage(artifacts, events, repo, include_sections=sections, check_violations=violations)
 
     if fmt == "json":
         click.echo(report_json(report))

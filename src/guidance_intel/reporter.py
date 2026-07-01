@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from rich.console import Console
 
@@ -50,6 +51,10 @@ def report_terminal(report: CoverageReport) -> None:
     if report.section_reports:
         _report_sections(console, report)
 
+    # Exclusion violations if available
+    if report.exclusion_violations:
+        _report_violations(console, report)
+
 
 def _report_sections(console: Console, report: CoverageReport) -> None:
     """Display section-level coverage details."""
@@ -88,6 +93,46 @@ def _report_sections(console: Console, report: CoverageReport) -> None:
             console.print(f"    ... and {len(artifact_report.sections) - 8} more sections")
 
         console.print()
+
+
+def _report_violations(console: Console, report: CoverageReport) -> None:
+    """Display exclusion violations."""
+    console.print("\n[bold red]⚠️  EXCLUSION VIOLATIONS[/bold red]")
+    console.print("=" * 40)
+    console.print()
+
+    if not report.exclusion_violations:
+        console.print("[green]No violations detected.[/green]")
+        return
+
+    total_waste = sum(v.total_token_waste for v in report.exclusion_violations)
+
+    console.print(f"[yellow]Files marked as excluded but read by AI:[/yellow]\n")
+
+    for violation in report.exclusion_violations:
+        console.print(f"[red]❌ {Path(violation.file_path).name}[/red]")
+        console.print(f"  Location: {violation.file_path}")
+        console.print(f"  Reason: {violation.exclusion_reason}")
+        console.print(f"  Times accessed: {violation.access_count}")
+        console.print(f"  Token waste: ~{violation.token_estimate:,} tokens/access")
+        console.print(f"  [yellow]Total waste: ~{violation.total_token_waste:,} tokens[/yellow]")
+        console.print(f"  Sessions: {', '.join(violation.sessions[:5])}")
+        if len(violation.sessions) > 5:
+            console.print(f"            ... and {len(violation.sessions) - 5} more")
+
+        # Recommendation
+        console.print(f"\n  💡 [cyan]Recommendation:[/cyan]")
+        if "[Auto-detected]" in violation.exclusion_reason:
+            console.print(f"     • Add ai-exclude: true to frontmatter if this file shouldn't be read")
+            console.print(f"     • Or move to docs/ directory outside guidance paths")
+        else:
+            console.print(f"     • Move to docs/ directory outside .agents/ or .claude/")
+            console.print(f"     • Or remove ai-exclude marker if AI should use this file")
+        console.print()
+
+    console.print(f"[bold]Total Exclusion Violations:[/bold] {len(report.exclusion_violations)} files")
+    console.print(f"[bold yellow]Total Token Waste:[/bold yellow] ~{total_waste:,} tokens")
+    console.print()
 
 
 def report_json(report: CoverageReport) -> str:
@@ -136,6 +181,20 @@ def report_json(report: CoverageReport) -> str:
                 ],
             }
             for sr in report.section_reports
+        ]
+
+    # Add exclusion violations if available
+    if report.exclusion_violations:
+        data["exclusion_violations"] = [
+            {
+                "file_path": v.file_path,
+                "exclusion_reason": v.exclusion_reason,
+                "access_count": v.access_count,
+                "sessions": v.sessions,
+                "token_estimate": v.token_estimate,
+                "total_token_waste": v.total_token_waste,
+            }
+            for v in report.exclusion_violations
         ]
 
     return json.dumps(data, indent=2)

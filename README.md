@@ -32,6 +32,11 @@ Dead Guidance: 3 artifacts never triggered across 23 sessions
 Section-Level Coverage:
   unity-codegen: 8/12 sections used
     ✗ Platform Details (lines 122-180) - DEAD - ~1,200 tokens wasted/invocation
+
+# With --violations flag
+⚠️  EXCLUSION VIOLATIONS:
+  ❌ TEST_PLAN.md: 19 accesses, ~158k tokens wasted (Test documentation)
+  💡 Move to docs/ or add ai-exclude: true to frontmatter
 ```
 
 ## Why
@@ -51,9 +56,10 @@ Guidance Intelligence answers these questions by analyzing real agent session tr
 2. **Parses** Claude Code session transcripts from `~/.claude/`
 3. **Tracks** both formal tool invocations AND manual Read references
 4. **Analyzes** section-level usage within each file (with `--sections`)
-5. **Reports** coverage, dead guidance, usage statistics, and token waste
+5. **Detects violations** when AI reads files marked as excluded (with `--violations`)
+6. **Reports** coverage, dead guidance, usage statistics, and token waste
 
-**Closed-loop feedback:** See not just what exists, but what's actually used and which sections waste tokens.
+**Closed-loop feedback:** See what's used, what's wasted, and what violates project conventions.
 
 Zero configuration. No setup. No YAML files to write.
 
@@ -62,6 +68,7 @@ Zero configuration. No setup. No YAML files to write.
 ```bash
 gi coverage                    # Full coverage report (default)
 gi coverage --sections         # Include section-level analysis (token waste)
+gi coverage --violations       # Check for AI reading excluded files
 gi discover                    # Show discovered artifacts and transcripts
 gi dead                        # Show only unused/dead guidance
 gi stats                       # Detailed per-artifact statistics
@@ -72,6 +79,7 @@ gi coverage --format md        # Markdown output (for sharing)
 gi coverage --last 10          # Only last 10 sessions
 gi coverage --transcripts ./   # Use custom transcript directory
 gi coverage --sections         # Show which sections of files are unused
+gi coverage --violations       # Detect when AI reads non-AI files
 ```
 
 ## What It Discovers

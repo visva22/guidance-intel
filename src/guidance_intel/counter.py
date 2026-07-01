@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import Artifact, ArtifactSectionReport, CoverageReport, SectionUsageRecord, TranscriptEvent, UsageRecord
+from .exclusions import estimate_file_tokens, is_likely_documentation, parse_frontmatter_exclusion
+from .models import Artifact, ArtifactSectionReport, CoverageReport, ExclusionViolation, SectionUsageRecord, TranscriptEvent, UsageRecord
 from .sections import detect_section_mentions, parse_sections
 
 
@@ -12,6 +13,7 @@ def compute_coverage(
     events: list[TranscriptEvent],
     repo_path: str,
     include_sections: bool = False,
+    check_violations: bool = False,
 ) -> CoverageReport:
     session_ids = sorted(set(e.session_id for e in events))
     sessions_total = len(session_ids)
@@ -32,6 +34,11 @@ def compute_coverage(
     if include_sections:
         section_reports = _compute_section_coverage(artifacts, events, repo_path)
 
+    # Detect exclusion violations if requested
+    violations = []
+    if check_violations:
+        violations = _detect_exclusion_violations(events, repo_path)
+
     return CoverageReport(
         repo_path=repo_path,
         analyzed_at=datetime.now(timezone.utc).isoformat(),
@@ -42,6 +49,7 @@ def compute_coverage(
         coverage_percent=round(coverage_pct, 1),
         usage=sorted(usage_records, key=lambda r: r.total_count, reverse=True),
         section_reports=section_reports,
+        exclusion_violations=violations,
     )
 
 
@@ -206,3 +214,62 @@ def _get_subsequent_events(
                 break
 
     return subsequent
+
+
+def _detect_exclusion_violations(
+    events: list[TranscriptEvent],
+    repo_path: str,
+) -> list[ExclusionViolation]:
+    """Detect when AI reads files marked as excluded."""
+    violations_map = {}
+
+    for event in events:
+        # Only check Read tool calls
+        if not event.metadata or not event.metadata.get("manual_reference"):
+            continue
+
+        file_path = event.metadata.get("file_path", "")
+        if not file_path:
+            continue
+
+        # Build full path
+        full_path = Path(repo_path) / file_path
+
+        # Check if file has ai-exclude frontmatter
+        is_excluded, reason = parse_frontmatter_exclusion(full_path)
+
+        # If not explicitly excluded, check if it looks like documentation
+        if not is_excluded:
+            is_excluded, reason = is_likely_documentation(file_path)
+            if is_excluded:
+                reason = f"[Auto-detected] {reason}"
+
+        if is_excluded:
+            key = file_path
+            if key not in violations_map:
+                violations_map[key] = {
+                    "file_path": file_path,
+                    "exclusion_reason": reason,
+                    "sessions": set(),
+                    "access_count": 0,
+                }
+
+            violations_map[key]["access_count"] += 1
+            violations_map[key]["sessions"].add(event.session_id)
+
+    # Convert to violation objects
+    violations = []
+    for v in violations_map.values():
+        full_path = Path(repo_path) / v["file_path"]
+        token_estimate = estimate_file_tokens(full_path)
+
+        violations.append(ExclusionViolation(
+            file_path=v["file_path"],
+            exclusion_reason=v["exclusion_reason"],
+            access_count=v["access_count"],
+            sessions=sorted(v["sessions"]),
+            token_estimate=token_estimate,
+            total_token_waste=token_estimate * v["access_count"],
+        ))
+
+    return sorted(violations, key=lambda x: x.total_token_waste, reverse=True)
