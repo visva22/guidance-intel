@@ -66,18 +66,28 @@ gi coverage --transcripts ./   # Use custom transcript directory
 
 ## What It Discovers
 
-| Location | Type |
-|----------|------|
-| `.claude/skills/*/SKILL.md` | Skills |
-| `AGENTS.md` | Agents |
-| `.claude/agents/*.md` | Agents |
-| `.claude/workflows/*` | Workflows |
-| `CLAUDE.md` / `.claude/CLAUDE.md` | Instructions |
+Works with multiple directory structures and AI agent frameworks:
+
+| Pattern | Type | Examples |
+|---------|------|----------|
+| `.claude/skills/*/SKILL.md` | Skills | Claude Code standard |
+| `.agents/skills/**/*.md` | Skills | Custom agent frameworks |
+| `skills/**/*.md` | Skills | Generic skills directory |
+| `prompts/**/*.{md,txt,prompt}` | Skills | Prompt libraries |
+| `AGENTS.md` | Agents | Agent definitions |
+| `.claude/agents/*.md` | Agents | Individual agent files |
+| `.agents/**/*.md` | Agents | Custom agent frameworks |
+| `agents/**/*.md` | Agents | Generic agents directory |
+| `.claude/workflows/*.{yaml,yml,md}` | Workflows | Claude Code workflows |
+| `workflows/**/*.{yaml,yml,json}` | Workflows | Generic workflows |
+| `tools/**/*.{yaml,json}` | Tools | LangChain/CrewAI style |
+| `CLAUDE.md`, `INSTRUCTIONS.md` | Instructions | System prompts |
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.9+
 - Works with Claude Code session transcripts
+- Framework-agnostic: discovers guidance in any directory structure
 - Also accepts generic JSONL event files for other agents
 
 ## How It Differs From Other Tools

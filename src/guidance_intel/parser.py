@@ -50,12 +50,27 @@ def _parse_claude_code_line(line: str, session_id: str) -> TranscriptEvent | Non
     except json.JSONDecodeError:
         return None
 
-    if data.get("type") != "tool_use":
+    # Extract tool use events - handle both formats:
+    # 1. Direct: {"type": "tool_use", "name": "Skill"}
+    # 2. Nested: {"type": "assistant", "message": {"content": [{"type": "tool_use"}]}}
+    tool_uses = []
+    timestamp = data.get("timestamp")
+
+    if data.get("type") == "tool_use":
+        tool_uses.append(data)
+    elif data.get("type") == "assistant":
+        message = data.get("message", {})
+        content = message.get("content", [])
+        if isinstance(content, list):
+            tool_uses.extend([item for item in content if item.get("type") == "tool_use"])
+
+    if not tool_uses:
         return None
 
-    tool_name = data.get("name", "")
-    tool_input = data.get("input", {})
-    timestamp = data.get("timestamp")
+    # Process first tool use (could extend to handle multiple)
+    tool_use = tool_uses[0]
+    tool_name = tool_use.get("name", "")
+    tool_input = tool_use.get("input", {})
 
     if tool_name == "Skill":
         skill_name = tool_input.get("skill", "")
