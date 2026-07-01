@@ -115,11 +115,31 @@ def _compute_section_coverage(
 
         # For each Read event, correlate with sections
         for event in matching_events:
-            # Get subsequent events in same session (next 3 assistant messages)
-            subsequent = _get_subsequent_events(event, events, limit=3)
+            # Check if Read tool specified line ranges (offset/limit)
+            if event.metadata and event.metadata.get("manual_reference"):
+                offset = event.metadata.get("offset")
+                limit = event.metadata.get("limit")
+
+                # If line range specified, mark those sections as used
+                if offset is not None:
+                    start_line = offset + 1  # offset is 0-based, lines are 1-based
+                    end_line = start_line + (limit or 100) - 1
+
+                    for section in sections:
+                        # Check if section overlaps with read range
+                        if not (section.end_line < start_line or section.start_line > end_line):
+                            section.usage_count += 1
+                            section.sessions_used.add(event.session_id)
+
+            # Get subsequent events in same session (next 5 assistant messages)
+            subsequent = _get_subsequent_events(event, events, limit=5)
 
             # Extract text from subsequent events to detect section mentions
             subsequent_text = " ".join([e.name for e in subsequent])
+
+            # Also include the event name itself (might be description)
+            if event.name:
+                subsequent_text = event.name + " " + subsequent_text
 
             # Detect which sections were mentioned
             mentioned_sections = detect_section_mentions(subsequent_text, sections)

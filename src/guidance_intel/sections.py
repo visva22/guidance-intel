@@ -96,15 +96,58 @@ def detect_section_mentions(text: str, sections: list[Section]) -> list[Section]
     """
     Detect which sections are mentioned in the given text.
 
-    Returns list of sections whose titles appear in the text.
+    Uses multiple strategies:
+    1. Exact title match
+    2. Keyword overlap (>50% of significant words)
+    3. Key phrase extraction from section content
     """
     text_lower = text.lower()
     mentioned = []
 
     for section in sections:
-        # Check if section title is mentioned
+        score = 0
+
+        # Strategy 1: Exact title match
         title_lower = section.title.lower()
         if title_lower in text_lower:
+            score += 10
+
+        # Strategy 2: Title words overlap
+        title_words = set(re.findall(r'\w+', title_lower))
+        # Filter out common words
+        title_words = {w for w in title_words if len(w) > 3 and w not in {'this', 'that', 'with', 'from', 'have', 'will', 'your'}}
+
+        if title_words:
+            text_words = set(re.findall(r'\w+', text_lower))
+            overlap = title_words & text_words
+            overlap_pct = len(overlap) / len(title_words)
+
+            if overlap_pct >= 0.5:  # 50% of title words mentioned
+                score += int(overlap_pct * 5)
+
+        # Strategy 3: Extract key phrases from section content (first 200 chars)
+        content_sample = section.content[:200].lower()
+        key_phrases = _extract_key_phrases(content_sample)
+
+        for phrase in key_phrases:
+            if phrase in text_lower and len(phrase) > 5:
+                score += 2
+
+        # Threshold: score >= 3 means section was likely referenced
+        if score >= 3:
             mentioned.append(section)
 
     return mentioned
+
+
+def _extract_key_phrases(text: str) -> list[str]:
+    """Extract potential key phrases from text (simple heuristic)."""
+    # Find words in **bold** or `code`
+    bold_words = re.findall(r'\*\*([^*]+)\*\*', text)
+    code_words = re.findall(r'`([^`]+)`', text)
+
+    # Find capitalized terms (likely important concepts)
+    cap_words = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', text)
+
+    phrases = bold_words + code_words + cap_words
+    return [p.lower() for p in phrases if len(p) > 3]
