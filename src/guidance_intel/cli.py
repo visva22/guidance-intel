@@ -5,7 +5,7 @@ import click
 from .counter import compute_coverage
 from .discovery import discover_artifacts, discover_transcripts
 from .parser import parse_generic_jsonl, parse_transcripts
-from .reporter import report_json, report_markdown, report_terminal
+from .reporter import report_dependencies, report_json, report_markdown, report_terminal
 
 
 @click.group()
@@ -22,7 +22,9 @@ def cli():
 @click.option("--last", default=None, type=int, help="Analyze only the last N sessions.")
 @click.option("--sections", is_flag=True, help="Include section-level coverage analysis (shows token waste).")
 @click.option("--violations", is_flag=True, help="Check for exclusion violations (AI reading non-AI files).")
-def coverage(repo, transcripts, fmt, last, sections, violations):
+@click.option("--dependencies", "dependencies", is_flag=True, help="Analyze per-invocation context and skill leakage.")
+@click.option("--all", "show_all", is_flag=True, help="Show all violations, including user-requested reads.")
+def coverage(repo, transcripts, fmt, last, sections, violations, dependencies, show_all):
     """Analyze guidance coverage across agent sessions."""
     repo = os.path.abspath(repo)
 
@@ -45,14 +47,21 @@ def coverage(repo, transcripts, fmt, last, sections, violations):
     if not events and transcripts:
         events = parse_generic_jsonl(transcript_paths)
 
-    report = compute_coverage(artifacts, events, repo, include_sections=sections, check_violations=violations)
+    report = compute_coverage(
+        artifacts, events, repo,
+        include_sections=sections,
+        check_violations=violations,
+        include_dependencies=dependencies,
+    )
 
     if fmt == "json":
         click.echo(report_json(report))
     elif fmt == "md":
         click.echo(report_markdown(report))
     else:
-        report_terminal(report)
+        report_terminal(report, show_all=show_all)
+        if dependencies:
+            report_dependencies(report)
 
 
 @cli.command()

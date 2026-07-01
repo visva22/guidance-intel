@@ -8,7 +8,7 @@ from rich.console import Console
 from .models import CoverageReport, UsageRecord
 
 
-def report_terminal(report: CoverageReport) -> None:
+def report_terminal(report: CoverageReport, show_all: bool = False) -> None:
     console = Console()
 
     console.print()
@@ -53,7 +53,7 @@ def report_terminal(report: CoverageReport) -> None:
 
     # Exclusion violations if available
     if report.exclusion_violations:
-        _report_violations(console, report)
+        _report_violations(console, report, show_all=show_all)
 
 
 def _report_sections(console: Console, report: CoverageReport) -> None:
@@ -95,24 +95,53 @@ def _report_sections(console: Console, report: CoverageReport) -> None:
         console.print()
 
 
-def _report_violations(console: Console, report: CoverageReport) -> None:
-    """Display exclusion violations."""
+def _is_user_requested(v) -> bool:
+    """A violation dominated by user-requested reads is a false positive by default."""
+    return v.classification == "user_requested"
+
+
+def _report_violations(console: Console, report: CoverageReport, show_all: bool = False) -> None:
+    """Display exclusion violations, filtering user-requested reads by default (Use Case 1)."""
     console.print("\n[bold red]⚠️  EXCLUSION VIOLATIONS[/bold red]")
     console.print("=" * 40)
     console.print()
 
-    if not report.exclusion_violations:
+    all_violations = report.exclusion_violations
+    if not all_violations:
         console.print("[green]No violations detected.[/green]")
         return
 
-    total_waste = sum(v.total_token_waste for v in report.exclusion_violations)
+    if show_all:
+        shown = all_violations
+    else:
+        shown = [v for v in all_violations if not _is_user_requested(v)]
 
-    console.print(f"[yellow]Files marked as excluded but read by AI:[/yellow]\n")
+    suppressed = len(all_violations) - len(shown)
 
-    for violation in report.exclusion_violations:
+    if not shown:
+        console.print("[green]No autonomous violations — all excluded-file reads were user-requested.[/green]")
+        if suppressed:
+            console.print(f"[dim]({suppressed} user-requested read(s) hidden; use --all to show.)[/dim]")
+        console.print()
+        return
+
+    total_waste = sum(v.total_token_waste for v in shown)
+    console.print("[yellow]Files marked as excluded but read by AI:[/yellow]\n")
+
+    for violation in shown:
         console.print(f"[red]❌ {Path(violation.file_path).name}[/red]")
         console.print(f"  Location: {violation.file_path}")
         console.print(f"  Reason: {violation.exclusion_reason}")
+        console.print(
+            f"  Intent: [bold]{violation.classification}[/bold] "
+            f"({violation.confidence} confidence, via {violation.detection_method}) — {violation.classification_reason}"
+        )
+        # Access breakdown when mixed.
+        if violation.access_count > 1 and (violation.user_requested_count or violation.uncertain_count):
+            console.print(
+                f"    Accesses: {violation.autonomous_count} autonomous, "
+                f"{violation.user_requested_count} user-requested, {violation.uncertain_count} uncertain"
+            )
         console.print(f"  Times accessed: {violation.access_count}")
         console.print(f"  Token waste: ~{violation.token_estimate:,} tokens/access")
         console.print(f"  [yellow]Total waste: ~{violation.total_token_waste:,} tokens[/yellow]")
@@ -121,17 +150,19 @@ def _report_violations(console: Console, report: CoverageReport) -> None:
             console.print(f"            ... and {len(violation.sessions) - 5} more")
 
         # Recommendation
-        console.print(f"\n  💡 [cyan]Recommendation:[/cyan]")
+        console.print("\n  💡 [cyan]Recommendation:[/cyan]")
         if "[Auto-detected]" in violation.exclusion_reason:
-            console.print(f"     • Add ai-exclude: true to frontmatter if this file shouldn't be read")
-            console.print(f"     • Or move to docs/ directory outside guidance paths")
+            console.print("     • Add ai-exclude: true to frontmatter if this file shouldn't be read")
+            console.print("     • Or move to docs/ directory outside guidance paths")
         else:
-            console.print(f"     • Move to docs/ directory outside .agents/ or .claude/")
-            console.print(f"     • Or remove ai-exclude marker if AI should use this file")
+            console.print("     • Move to docs/ directory outside .agents/ or .claude/")
+            console.print("     • Or remove ai-exclude marker if AI should use this file")
         console.print()
 
-    console.print(f"[bold]Total Exclusion Violations:[/bold] {len(report.exclusion_violations)} files")
+    console.print(f"[bold]Autonomous Violations Shown:[/bold] {len(shown)} files")
     console.print(f"[bold yellow]Total Token Waste:[/bold yellow] ~{total_waste:,} tokens")
+    if suppressed and not show_all:
+        console.print(f"[dim]{suppressed} user-requested read(s) hidden as false positives; use --all to show.[/dim]")
     console.print()
 
 
@@ -193,11 +224,95 @@ def report_json(report: CoverageReport) -> str:
                 "sessions": v.sessions,
                 "token_estimate": v.token_estimate,
                 "total_token_waste": v.total_token_waste,
+                "classification": v.classification,
+                "confidence": v.confidence,
+                "classification_reason": v.classification_reason,
+                "detection_method": v.detection_method,
+                "user_requested_count": v.user_requested_count,
+                "autonomous_count": v.autonomous_count,
+                "uncertain_count": v.uncertain_count,
             }
             for v in report.exclusion_violations
         ]
 
+    # Add dependency reports if available
+    if report.dependency_reports:
+        data["dependencies"] = [
+            {
+                "artifact_name": d.artifact_name,
+                "artifact_kind": d.artifact_kind,
+                "invocation_count": d.invocation_count,
+                "session_count": d.session_count,
+                "primary_file": d.primary_file,
+                "primary_tokens": d.primary_tokens,
+                "avg_extra_reads": d.avg_extra_reads,
+                "avg_overhead_tokens": d.avg_overhead_tokens,
+                "attribution_method": d.attribution_method,
+                "cooccurrence": d.cooccurrence,
+                "reads": [
+                    {
+                        "file_path": r.file_path,
+                        "read_count": r.read_count,
+                        "token_estimate": r.token_estimate,
+                        "in_closure": r.in_closure,
+                        "leak_level": r.leak_level,
+                        "via_sidechain": r.via_sidechain,
+                    }
+                    for r in d.dependencies
+                ],
+            }
+            for d in report.dependency_reports
+        ]
+
     return json.dumps(data, indent=2)
+
+
+def report_dependencies(report: CoverageReport) -> None:
+    """Display per-invocation dependency / context-leakage analysis (Use Case 2)."""
+    console = Console()
+    console.print("\n[bold]Dependency Analysis[/bold]")
+    console.print("=" * 40)
+    console.print()
+
+    if not report.dependency_reports:
+        console.print("[dim]No invocations with tracked reads were found.[/dim]\n")
+        return
+
+    for d in report.dependency_reports:
+        console.print(
+            f"[bold]{d.artifact_name}[/bold] ({d.artifact_kind}) — "
+            f"{d.invocation_count} invocation(s) across {d.session_count} session(s)"
+        )
+        console.print(f"  Attribution: {d.attribution_method}")
+        if d.primary_file:
+            console.print(f"  Primary: {d.primary_file} (~{d.primary_tokens:,} tokens)")
+        console.print(
+            f"  Avg additional reads: {d.avg_extra_reads:.1f}   "
+            f"Avg overhead: ~{d.avg_overhead_tokens:,} tokens"
+        )
+
+        if d.dependencies:
+            console.print("  Reads within causal scope:")
+            for r in sorted(d.dependencies, key=lambda x: x.token_estimate, reverse=True):
+                if r.leak_level == "global":
+                    marker = "[red]❌ LEAK (global)[/red]"
+                elif r.leak_level == "cross-reference":
+                    marker = "[yellow]⚠️  cross-reference[/yellow]"
+                elif r.in_closure:
+                    marker = "[green]✓ declared[/green]"
+                else:
+                    marker = "[green]✓[/green]"
+                sc = " [dim](via subagent)[/dim]" if r.via_sidechain else ""
+                console.print(
+                    f"    {marker} {r.file_path} "
+                    f"(×{r.read_count}, ~{r.token_estimate:,} tok){sc}"
+                )
+
+        if d.cooccurrence:
+            console.print("  Co-occurrence across sessions (correlation only):")
+            for fp, frac in sorted(d.cooccurrence.items(), key=lambda kv: kv[1], reverse=True):
+                console.print(f"    {frac*100:.0f}%  {fp}")
+        console.print()
 
 
 def report_markdown(report: CoverageReport) -> str:

@@ -13,11 +13,16 @@ class Artifact:
 
 @dataclass
 class TranscriptEvent:
-    kind: str  # "skill" | "agent" | "workflow" | "tool"
+    kind: str  # "skill" | "agent" | "workflow" | "tool" | "user_message"
     name: str
     session_id: str
     timestamp: str | None = None
     metadata: dict | None = None  # For Read tool calls: file_path, offset, limit, manual_reference
+    # Causal-chain fields (populated from real Claude Code transcripts; None for generic JSONL).
+    uuid: str | None = None
+    parent_uuid: str | None = None
+    is_sidechain: bool = False
+    prompt_id: str | None = None
 
 
 @dataclass
@@ -75,6 +80,44 @@ class ExclusionViolation:
     sessions: list[str]
     token_estimate: int
     total_token_waste: int
+    # Intent classification (Use Case 1). A single file may be read both on user
+    # request and autonomously across accesses; these break the count down.
+    classification: str = "unknown"  # "user_requested" | "autonomous" | "uncertain" | "system" | "unknown"
+    confidence: str = "none"  # "high" | "medium" | "low" | "none"
+    classification_reason: str = ""
+    detection_method: str = "none"  # "causal" | "heuristic" | "none"
+    user_requested_count: int = 0
+    autonomous_count: int = 0
+    uncertain_count: int = 0
+
+
+@dataclass
+class InvocationDependency:
+    """Files read within the causal scope of a single skill/agent/workflow invocation."""
+    file_path: str
+    read_count: int = 0
+    token_estimate: int = 0
+    in_closure: bool = False  # True if declared as a dependency of the primary artifact
+    leak_level: str = "none"  # "global" | "cross-reference" | "none"
+    via_sidechain: bool = False  # Read happened inside a spawned subagent
+
+
+@dataclass
+class ArtifactDependencyReport:
+    """Aggregated dependency / context-leakage report for one artifact."""
+    artifact_name: str
+    artifact_kind: str
+    invocation_count: int
+    session_count: int
+    primary_file: str | None = None
+    primary_tokens: int = 0
+    # Per-invocation causal attribution (averaged) + co-occurrence aggregates.
+    dependencies: list[InvocationDependency] = field(default_factory=list)
+    avg_extra_reads: float = 0.0
+    avg_overhead_tokens: int = 0
+    attribution_method: str = "causal"  # "causal" | "prompt_scope" | "temporal" | "co-occurrence"
+    # Files that co-occur with this artifact across sessions: file_path -> fraction (0..1)
+    cooccurrence: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -89,3 +132,4 @@ class CoverageReport:
     usage: list[UsageRecord] = field(default_factory=list)
     section_reports: list[ArtifactSectionReport] = field(default_factory=list)  # Section-level data
     exclusion_violations: list[ExclusionViolation] = field(default_factory=list)  # Exclusion violations
+    dependency_reports: list[ArtifactDependencyReport] = field(default_factory=list)  # Dependency / leakage data

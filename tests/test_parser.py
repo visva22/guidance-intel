@@ -1,4 +1,4 @@
-from guidance_intel.parser import parse_transcripts, parse_generic_jsonl
+from guidance_intel.parser import parse_transcripts, parse_generic_jsonl, clean_user_text
 from pathlib import Path
 
 
@@ -146,3 +146,97 @@ def test_read_tool_workflows_directory(tmp_path):
     assert len(events) == 1
     assert events[0].kind == "workflow"
     assert events[0].name == "feature-dev"
+
+
+# --- Phase 0: multi-tool-call bug fix ---
+
+def test_captures_all_tool_calls_in_one_message(tmp_path):
+    """Regression: previously only tool_uses[0] was captured."""
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        '{"type": "assistant", "message": {"content": ['
+        '{"type": "tool_use", "name": "Skill", "input": {"skill": "graphify"}},'
+        '{"type": "tool_use", "name": "Read", "input": {"file_path": ".claude/skills/graphify/SKILL.md"}},'
+        '{"type": "tool_use", "name": "Read", "input": {"file_path": "AGENTS.md"}}'
+        ']}}\n'
+    )
+    events = parse_transcripts([str(transcript)])
+    assert len(events) == 3
+    kinds = [e.kind for e in events]
+    assert kinds == ["skill", "skill", "agent"]
+
+
+# --- Phase 0: causal fields ---
+
+def test_captures_causal_fields(tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        '{"type": "assistant", "uuid": "a1", "parentUuid": "u1", "isSidechain": true, "promptId": "p1",'
+        ' "message": {"content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "AGENTS.md"}}]}}\n'
+    )
+    events = parse_transcripts([str(transcript)])
+    assert len(events) == 1
+    e = events[0]
+    assert e.uuid == "a1"
+    assert e.parent_uuid == "u1"
+    assert e.is_sidechain is True
+    assert e.prompt_id == "p1"
+
+
+# --- Phase 0: user message capture & cleaning ---
+
+def test_captures_user_message_text(tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        '{"type": "user", "uuid": "u1", "message": {"role": "user", "content": [{"type": "text", "text": "Read TEST_PLAN.md please"}]}}\n'
+    )
+    events = parse_transcripts([str(transcript)])
+    assert len(events) == 1
+    assert events[0].kind == "user_message"
+    assert events[0].metadata["text"] == "Read TEST_PLAN.md please"
+
+
+def test_skips_tool_result_user_lines(tmp_path):
+    """Tool-result payloads are logged as type:user but are not human input."""
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        '{"type": "user", "uuid": "u1", "toolUseResult": {"ok": true}, "message": {"role": "user", "content": [{"type": "tool_result", "content": "file contents with path src/x.py"}]}}\n'
+    )
+    events = parse_transcripts([str(transcript)])
+    assert events == []
+
+
+def test_strips_injected_blocks_from_user_text(tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        '{"type": "user", "uuid": "u1", "message": {"role": "user", "content": [{"type": "text", "text": "<ide_opened_file>/repo/docs/TEST_PLAN.md</ide_opened_file>Generate tests"}]}}\n'
+    )
+    events = parse_transcripts([str(transcript)])
+    assert len(events) == 1
+    assert events[0].metadata["text"] == "Generate tests"
+
+
+def test_clean_user_text_removes_system_reminder():
+    raw = "<system-reminder>context stuff</system-reminder>Do the thing"
+    assert clean_user_text(raw) == "Do the thing"
+
+
+def test_at_mention_captured(tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        '{"type": "user", "uuid": "u1", "message": {"role": "user", "content": [{"type": "text", "text": "check @docs/TEST_PLAN.md"}]}}\n'
+    )
+    events = parse_transcripts([str(transcript)])
+    assert "docs/TEST_PLAN.md" in events[0].metadata["mentions"]
+
+
+def test_doc_read_captured_as_document(tmp_path):
+    """Doc-like files (TEST_PLAN) are captured so exclusions can fire on them."""
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        '{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "docs/TEST_PLAN.md"}}]}}\n'
+    )
+    events = parse_transcripts([str(transcript)])
+    assert len(events) == 1
+    assert events[0].kind == "document"
+    assert events[0].metadata["doc_reference"] is True

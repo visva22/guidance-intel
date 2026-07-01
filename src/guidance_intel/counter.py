@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .classification import build_uuid_index, classify_read
+from .dependencies import analyze_dependencies
 from .exclusions import estimate_file_tokens, is_likely_documentation, parse_frontmatter_exclusion
 from .models import Artifact, ArtifactSectionReport, CoverageReport, ExclusionViolation, SectionUsageRecord, TranscriptEvent, UsageRecord
 from .sections import detect_section_mentions, parse_sections
@@ -14,6 +16,7 @@ def compute_coverage(
     repo_path: str,
     include_sections: bool = False,
     check_violations: bool = False,
+    include_dependencies: bool = False,
 ) -> CoverageReport:
     session_ids = sorted(set(e.session_id for e in events))
     sessions_total = len(session_ids)
@@ -39,6 +42,12 @@ def compute_coverage(
     if check_violations:
         violations = _detect_exclusion_violations(events, repo_path)
 
+    # Dependency / context-leakage analysis if requested
+    dependency_reports = []
+    if include_dependencies:
+        artifact_source = {a.name: a.source_path for a in artifacts}
+        dependency_reports = analyze_dependencies(artifacts, events, repo_path, artifact_source)
+
     return CoverageReport(
         repo_path=repo_path,
         analyzed_at=datetime.now(timezone.utc).isoformat(),
@@ -50,6 +59,7 @@ def compute_coverage(
         usage=sorted(usage_records, key=lambda r: r.total_count, reverse=True),
         section_reports=section_reports,
         exclusion_violations=violations,
+        dependency_reports=dependency_reports,
     )
 
 
@@ -220,48 +230,79 @@ def _detect_exclusion_violations(
     events: list[TranscriptEvent],
     repo_path: str,
 ) -> list[ExclusionViolation]:
-    """Detect when AI reads files marked as excluded."""
+    """Detect when AI reads files marked as excluded, classifying each access
+    as user-requested vs autonomous (Use Case 1)."""
     violations_map = {}
+    index = build_uuid_index(events)
+
+    # Confidence ranking, so the file's headline classification reflects its
+    # strongest single access.
+    conf_rank = {"high": 3, "medium": 2, "low": 1, "none": 0}
 
     for event in events:
-        # Only check Read tool calls
+        # Only Read events carry a file_path; user_message events set manual_reference-less metadata.
         if not event.metadata or not event.metadata.get("manual_reference"):
             continue
-
         file_path = event.metadata.get("file_path", "")
         if not file_path:
             continue
 
-        # Build full path
         full_path = Path(repo_path) / file_path
 
         # Check if file has ai-exclude frontmatter
         is_excluded, reason = parse_frontmatter_exclusion(full_path)
-
         # If not explicitly excluded, check if it looks like documentation
         if not is_excluded:
             is_excluded, reason = is_likely_documentation(file_path)
             if is_excluded:
                 reason = f"[Auto-detected] {reason}"
 
-        if is_excluded:
-            key = file_path
-            if key not in violations_map:
-                violations_map[key] = {
-                    "file_path": file_path,
-                    "exclusion_reason": reason,
-                    "sessions": set(),
-                    "access_count": 0,
-                }
+        if not is_excluded:
+            continue
 
-            violations_map[key]["access_count"] += 1
-            violations_map[key]["sessions"].add(event.session_id)
+        result = classify_read(event, events, index)
 
-    # Convert to violation objects
+        key = file_path
+        if key not in violations_map:
+            violations_map[key] = {
+                "file_path": file_path,
+                "exclusion_reason": reason,
+                "sessions": set(),
+                "access_count": 0,
+                "user_requested_count": 0,
+                "autonomous_count": 0,
+                "uncertain_count": 0,
+                "best": None,  # strongest classification for the headline
+            }
+        v = violations_map[key]
+        v["access_count"] += 1
+        v["sessions"].add(event.session_id)
+
+        if result.classification == "user_requested":
+            v["user_requested_count"] += 1
+        elif result.classification == "autonomous":
+            v["autonomous_count"] += 1
+        elif result.classification == "uncertain":
+            v["uncertain_count"] += 1
+
+        # Headline = the most-confident autonomous access if any, else strongest overall.
+        if v["best"] is None:
+            v["best"] = result
+        else:
+            cur = v["best"]
+            # Prefer autonomous (the real violation signal), then higher confidence.
+            cur_is_auto = cur.classification == "autonomous"
+            new_is_auto = result.classification == "autonomous"
+            if (new_is_auto and not cur_is_auto) or (
+                new_is_auto == cur_is_auto and conf_rank[result.confidence] > conf_rank[cur.confidence]
+            ):
+                v["best"] = result
+
     violations = []
     for v in violations_map.values():
         full_path = Path(repo_path) / v["file_path"]
         token_estimate = estimate_file_tokens(full_path)
+        best = v["best"]
 
         violations.append(ExclusionViolation(
             file_path=v["file_path"],
@@ -270,6 +311,13 @@ def _detect_exclusion_violations(
             sessions=sorted(v["sessions"]),
             token_estimate=token_estimate,
             total_token_waste=token_estimate * v["access_count"],
+            classification=best.classification if best else "unknown",
+            confidence=best.confidence if best else "none",
+            classification_reason=best.reason if best else "",
+            detection_method=best.method if best else "none",
+            user_requested_count=v["user_requested_count"],
+            autonomous_count=v["autonomous_count"],
+            uncertain_count=v["uncertain_count"],
         ))
 
     return sorted(violations, key=lambda x: x.total_token_waste, reverse=True)

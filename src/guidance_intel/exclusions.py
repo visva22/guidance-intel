@@ -98,3 +98,24 @@ def estimate_file_tokens(file_path: str | Path) -> int:
         return len(content) // 4
     except (OSError, UnicodeDecodeError):
         return 0
+
+
+def estimate_read_tokens(file_path: str | Path, offset: int | None = None, limit: int | None = None) -> int:
+    """Estimate tokens for the portion of a file actually read.
+
+    Uses offset/limit (from the Read tool) to count only the lines that were
+    loaded, rather than the whole file — so partial reads aren't over-counted.
+    Falls back to the whole-file estimate when no range is given.
+    """
+    if offset is None and limit is None:
+        return estimate_file_tokens(file_path)
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except (OSError, UnicodeDecodeError):
+        return 0
+    start = offset if offset is not None else 0
+    start = max(0, start)
+    end = start + limit if limit is not None else len(lines)
+    chunk = "".join(lines[start:end])
+    return len(chunk) // 4
