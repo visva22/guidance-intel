@@ -121,6 +121,8 @@ def _is_guidance_file(file_path: str) -> bool:
     # Skills
     if "/skills/" in path_lower and file_path.endswith(".md"):
         return True
+    if ("prompts/" in path_lower or "/prompts/" in path_lower) and file_path.endswith((".md", ".txt", ".prompt")):
+        return True
 
     # Agents
     if file_path.endswith("AGENTS.md"):
@@ -130,6 +132,8 @@ def _is_guidance_file(file_path: str) -> bool:
 
     # Workflows
     if "/workflows/" in path_lower and any(file_path.endswith(ext) for ext in [".yaml", ".yml", ".md", ".json"]):
+        return True
+    if "/tools/" in path_lower and any(file_path.endswith(ext) for ext in [".yaml", ".json"]):
         return True
 
     # Instructions
@@ -166,11 +170,12 @@ def _extract_artifact_name_from_path(file_path: str) -> str:
 
 def _detect_guidance_kind(file_path: str) -> str:
     """Detect whether file is skill, agent, workflow, or instruction."""
-    if "/skills/" in file_path.lower() or "prompts/" in file_path.lower():
+    path_lower = file_path.lower()
+    if "/skills/" in path_lower or "prompts/" in path_lower:
         return "skill"
-    elif "/agents/" in file_path.lower() or file_path.endswith("AGENTS.md"):
+    elif "/agents/" in path_lower or file_path.endswith("AGENTS.md"):
         return "agent"
-    elif "/workflows/" in file_path.lower() or "/tools/" in file_path.lower():
+    elif "/workflows/" in path_lower or "/tools/" in path_lower or "tools/" in path_lower:
         return "workflow"
     else:
         return "instruction"
