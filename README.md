@@ -27,6 +27,11 @@ Agents (3 total)
 
 Overall Coverage: 64% (7/11 artifacts used)
 Dead Guidance: 3 artifacts never triggered across 23 sessions
+
+# With --sections flag
+Section-Level Coverage:
+  unity-codegen: 8/12 sections used
+    ✗ Platform Details (lines 122-180) - DEAD - ~1,200 tokens wasted/invocation
 ```
 
 ## Why
@@ -44,8 +49,11 @@ Guidance Intelligence answers these questions by analyzing real agent session tr
 
 1. **Discovers** all guidance artifacts in your repo (skills, agents, workflows)
 2. **Parses** Claude Code session transcripts from `~/.claude/`
-3. **Counts** how often each artifact is triggered
-4. **Reports** coverage, dead guidance, and usage statistics
+3. **Tracks** both formal tool invocations AND manual Read references
+4. **Analyzes** section-level usage within each file (with `--sections`)
+5. **Reports** coverage, dead guidance, usage statistics, and token waste
+
+**Closed-loop feedback:** See not just what exists, but what's actually used and which sections waste tokens.
 
 Zero configuration. No setup. No YAML files to write.
 
@@ -53,6 +61,7 @@ Zero configuration. No setup. No YAML files to write.
 
 ```bash
 gi coverage                    # Full coverage report (default)
+gi coverage --sections         # Include section-level analysis (token waste)
 gi discover                    # Show discovered artifacts and transcripts
 gi dead                        # Show only unused/dead guidance
 gi stats                       # Detailed per-artifact statistics
@@ -62,6 +71,7 @@ gi coverage --format json      # JSON output (for CI)
 gi coverage --format md        # Markdown output (for sharing)
 gi coverage --last 10          # Only last 10 sessions
 gi coverage --transcripts ./   # Use custom transcript directory
+gi coverage --sections         # Show which sections of files are unused
 ```
 
 ## What It Discovers

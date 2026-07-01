@@ -20,7 +20,8 @@ def cli():
 @click.option("--transcripts", default=None, help="Path to transcript files or directory.")
 @click.option("--format", "fmt", type=click.Choice(["terminal", "json", "md"]), default="terminal")
 @click.option("--last", default=None, type=int, help="Analyze only the last N sessions.")
-def coverage(repo, transcripts, fmt, last):
+@click.option("--sections", is_flag=True, help="Include section-level coverage analysis (shows token waste).")
+def coverage(repo, transcripts, fmt, last, sections):
     """Analyze guidance coverage across agent sessions."""
     repo = os.path.abspath(repo)
 
@@ -43,7 +44,7 @@ def coverage(repo, transcripts, fmt, last):
     if not events and transcripts:
         events = parse_generic_jsonl(transcript_paths)
 
-    report = compute_coverage(artifacts, events, repo)
+    report = compute_coverage(artifacts, events, repo, include_sections=sections)
 
     if fmt == "json":
         click.echo(report_json(report))

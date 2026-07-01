@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
-from .models import Artifact, CoverageReport, TranscriptEvent, UsageRecord
+from .models import Artifact, ArtifactSectionReport, CoverageReport, SectionUsageRecord, TranscriptEvent, UsageRecord
+from .sections import detect_section_mentions, parse_sections
 
 
 def compute_coverage(
     artifacts: list[Artifact],
     events: list[TranscriptEvent],
     repo_path: str,
+    include_sections: bool = False,
 ) -> CoverageReport:
     session_ids = sorted(set(e.session_id for e in events))
     sessions_total = len(session_ids)
@@ -24,6 +27,11 @@ def compute_coverage(
     total = len(artifacts)
     coverage_pct = (len(used) / total * 100) if total > 0 else 0.0
 
+    # Compute section-level coverage if requested
+    section_reports = []
+    if include_sections:
+        section_reports = _compute_section_coverage(artifacts, events, repo_path)
+
     return CoverageReport(
         repo_path=repo_path,
         analyzed_at=datetime.now(timezone.utc).isoformat(),
@@ -33,6 +41,7 @@ def compute_coverage(
         dead_artifacts=dead,
         coverage_percent=round(coverage_pct, 1),
         usage=sorted(usage_records, key=lambda r: r.total_count, reverse=True),
+        section_reports=section_reports,
     )
 
 
@@ -78,3 +87,102 @@ def _find_matching_events(artifact: Artifact, events: list[TranscriptEvent]) -> 
                 break
 
     return matched
+
+
+def _compute_section_coverage(
+    artifacts: list[Artifact],
+    events: list[TranscriptEvent],
+    repo_path: str,
+) -> list[ArtifactSectionReport]:
+    """Compute section-level coverage for used artifacts."""
+    section_reports = []
+
+    for artifact in artifacts:
+        # Only analyze artifacts that were actually used
+        matching_events = _find_matching_events(artifact, events)
+        if not matching_events:
+            continue
+
+        # Build full path to artifact file
+        file_path = Path(repo_path) / artifact.source_path
+        if not file_path.exists():
+            continue
+
+        # Parse sections from the file
+        sections = parse_sections(file_path)
+        if not sections:
+            continue
+
+        # For each Read event, correlate with sections
+        for event in matching_events:
+            # Get subsequent events in same session (next 3 assistant messages)
+            subsequent = _get_subsequent_events(event, events, limit=3)
+
+            # Extract text from subsequent events to detect section mentions
+            subsequent_text = " ".join([e.name for e in subsequent])
+
+            # Detect which sections were mentioned
+            mentioned_sections = detect_section_mentions(subsequent_text, sections)
+
+            # Mark sections as used
+            for section in mentioned_sections:
+                section.usage_count += 1
+                section.sessions_used.add(event.session_id)
+
+        # Build section usage records
+        total_invocations = len(matching_events)
+        section_usages = []
+        dead_section_count = 0
+        token_waste = 0
+
+        for section in sections:
+            usage_pct = (section.usage_count / total_invocations * 100) if total_invocations > 0 else 0
+            is_dead = section.usage_count == 0
+
+            if is_dead:
+                dead_section_count += 1
+                token_waste += section.token_estimate
+
+            section_usages.append(SectionUsageRecord(
+                section_title=section.title,
+                line_range=f"{section.start_line}-{section.end_line}",
+                usage_count=section.usage_count,
+                usage_percentage=round(usage_pct, 1),
+                token_estimate=section.token_estimate,
+                is_dead=is_dead,
+            ))
+
+        section_reports.append(ArtifactSectionReport(
+            artifact_name=artifact.name,
+            artifact_kind=artifact.kind,
+            file_path=artifact.source_path,
+            total_invocations=total_invocations,
+            sections=section_usages,
+            dead_section_count=dead_section_count,
+            token_waste_estimate=token_waste,
+        ))
+
+    return sorted(section_reports, key=lambda r: r.token_waste_estimate, reverse=True)
+
+
+def _get_subsequent_events(
+    event: TranscriptEvent,
+    all_events: list[TranscriptEvent],
+    limit: int = 3,
+) -> list[TranscriptEvent]:
+    """Get the next N events in the same session after the given event."""
+    # Find event index
+    try:
+        idx = all_events.index(event)
+    except ValueError:
+        return []
+
+    # Get subsequent events from same session
+    subsequent = []
+    for e in all_events[idx + 1:]:
+        if e.session_id == event.session_id:
+            subsequent.append(e)
+            if len(subsequent) >= limit:
+                break
+
+    return subsequent

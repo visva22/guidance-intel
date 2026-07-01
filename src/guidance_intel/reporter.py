@@ -46,6 +46,49 @@ def report_terminal(report: CoverageReport) -> None:
 
     console.print()
 
+    # Section-level reporting if available
+    if report.section_reports:
+        _report_sections(console, report)
+
+
+def _report_sections(console: Console, report: CoverageReport) -> None:
+    """Display section-level coverage details."""
+    console.print("\n[bold]Section-Level Coverage[/bold]")
+    console.print("=" * 40)
+    console.print()
+
+    # Show top artifacts with most token waste
+    top_waste = sorted(report.section_reports, key=lambda r: r.token_waste_estimate, reverse=True)[:5]
+
+    for artifact_report in top_waste:
+        if artifact_report.token_waste_estimate == 0:
+            continue  # Skip if no waste
+
+        console.print(f"[bold]{artifact_report.artifact_name}[/bold] ({artifact_report.artifact_kind})")
+        console.print(f"  File: {artifact_report.file_path}")
+        console.print(f"  Total invocations: {artifact_report.total_invocations}")
+        console.print(f"  Dead sections: {artifact_report.dead_section_count}/{len(artifact_report.sections)}")
+        console.print(f"  [yellow]Token waste estimate: ~{artifact_report.token_waste_estimate:,} tokens/invocation[/yellow]")
+        console.print()
+
+        # Show sections sorted by usage (dead ones first)
+        sorted_sections = sorted(artifact_report.sections, key=lambda s: (not s.is_dead, -s.usage_count))
+
+        for section in sorted_sections[:8]:  # Show top 8 sections
+            if section.is_dead:
+                status = "[red]DEAD (0%)[/red]"
+            elif section.usage_percentage < 25:
+                status = f"[yellow]LOW ({section.usage_percentage}%)[/yellow]"
+            else:
+                status = f"[green]{section.usage_percentage}%[/green]"
+
+            console.print(f"    {section.section_title:<30} {status:>20} (lines {section.line_range}, ~{section.token_estimate} tokens)")
+
+        if len(artifact_report.sections) > 8:
+            console.print(f"    ... and {len(artifact_report.sections) - 8} more sections")
+
+        console.print()
+
 
 def report_json(report: CoverageReport) -> str:
     data = {
@@ -69,6 +112,32 @@ def report_json(report: CoverageReport) -> str:
             for r in report.usage
         ],
     }
+
+    # Add section reports if available
+    if report.section_reports:
+        data["section_coverage"] = [
+            {
+                "artifact_name": sr.artifact_name,
+                "artifact_kind": sr.artifact_kind,
+                "file_path": sr.file_path,
+                "total_invocations": sr.total_invocations,
+                "dead_section_count": sr.dead_section_count,
+                "token_waste_estimate": sr.token_waste_estimate,
+                "sections": [
+                    {
+                        "title": s.section_title,
+                        "line_range": s.line_range,
+                        "usage_count": s.usage_count,
+                        "usage_percentage": s.usage_percentage,
+                        "token_estimate": s.token_estimate,
+                        "is_dead": s.is_dead,
+                    }
+                    for s in sr.sections
+                ],
+            }
+            for sr in report.section_reports
+        ]
+
     return json.dumps(data, indent=2)
 
 
