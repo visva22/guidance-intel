@@ -31,12 +31,13 @@ def coverage(repo, transcripts, fmt, last, sections, violations, dependencies, s
     artifacts = discover_artifacts(repo)
     if not artifacts:
         click.echo("No guidance artifacts found in this repository.")
-        click.echo("Looking for: .claude/skills/, AGENTS.md, .claude/workflows/")
+        click.echo("Looking for: .claude/skills/, AGENTS.md, .claude/workflows/, prompts/")
         return
 
     transcript_paths = discover_transcripts(repo, transcripts)
     if not transcript_paths:
         click.echo("No transcripts found.")
+        click.echo("Checked: ~/.claude/projects/, .langchain/, .crewai/, ./sessions/")
         click.echo("Provide transcripts with: gi coverage --transcripts <path>")
         raise SystemExit(1)
 

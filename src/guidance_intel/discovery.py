@@ -25,30 +25,74 @@ def discover_transcripts(repo_path: str, transcripts_path: str | None = None) ->
     if transcripts_path:
         return _find_jsonl_files(Path(transcripts_path))
 
-    claude_dir = Path.home() / ".claude" / "projects"
-    if not claude_dir.exists():
-        return []
-
-    project_dir = _find_project_dir(claude_dir, repo_path)
-    if not project_dir:
-        return []
-
     transcripts = []
 
-    # First check for UUID-named JSONL files directly in project folder (current Claude Code format)
-    for jsonl_file in sorted(project_dir.glob("*.jsonl")):
-        if jsonl_file.is_file():
-            transcripts.append(str(jsonl_file))
+    # Check multiple agent platform locations
+    # Claude Code: ~/.claude/projects/{project-dir}/*.jsonl or {project-dir}/sessions/*/transcript.jsonl
+    claude_dir = Path.home() / ".claude" / "projects"
+    if claude_dir.exists():
+        project_dir = _find_project_dir(claude_dir, repo_path)
+        if project_dir:
+            # UUID-named JSONL files directly in project folder
+            for jsonl_file in sorted(project_dir.glob("*.jsonl")):
+                if jsonl_file.is_file():
+                    transcripts.append(str(jsonl_file))
+            # Legacy sessions/ subdirectory structure
+            sessions_dir = project_dir / "sessions"
+            if sessions_dir.exists():
+                for session_dir in sorted(sessions_dir.iterdir()):
+                    transcript = session_dir / "transcript.jsonl"
+                    if transcript.exists():
+                        transcripts.append(str(transcript))
 
-    # Also check legacy sessions/ subdirectory structure
-    sessions_dir = project_dir / "sessions"
-    if sessions_dir.exists():
-        for session_dir in sorted(sessions_dir.iterdir()):
-            transcript = session_dir / "transcript.jsonl"
-            if transcript.exists():
-                transcripts.append(str(transcript))
+    # LangChain: .langchain/ in repo or ~/.langchain/
+    langchain_dirs = [
+        Path(repo_path) / ".langchain",
+        Path.home() / ".langchain",
+    ]
+    for base_dir in langchain_dirs:
+        if base_dir.exists():
+            # Check for sessions/ subdirectory
+            sessions_dir = base_dir / "sessions"
+            if sessions_dir.exists():
+                for session_file in sorted(sessions_dir.glob("*.jsonl")):
+                    if session_file.is_file():
+                        transcripts.append(str(session_file))
+            # Also check root for JSONL files
+            for jsonl_file in sorted(base_dir.glob("*.jsonl")):
+                if jsonl_file.is_file() and str(jsonl_file) not in transcripts:
+                    transcripts.append(str(jsonl_file))
 
-    return transcripts
+    # CrewAI: .crewai/ in repo or ~/.crewai/
+    crewai_dirs = [
+        Path(repo_path) / ".crewai",
+        Path.home() / ".crewai",
+    ]
+    for base_dir in crewai_dirs:
+        if base_dir.exists():
+            # Check for sessions/ or logs/ subdirectories
+            for subdir_name in ["sessions", "logs"]:
+                subdir = base_dir / subdir_name
+                if subdir.exists():
+                    for session_file in sorted(subdir.glob("*.jsonl")):
+                        if session_file.is_file() and str(session_file) not in transcripts:
+                            transcripts.append(str(session_file))
+            # Also check root for JSONL files
+            for jsonl_file in sorted(base_dir.glob("*.jsonl")):
+                if jsonl_file.is_file() and str(jsonl_file) not in transcripts:
+                    transcripts.append(str(jsonl_file))
+
+    # Generic fallback: check repo root for common patterns
+    repo_root = Path(repo_path)
+    common_transcript_dirs = [".sessions", "sessions", ".transcripts", "transcripts", ".logs", "logs"]
+    for dir_name in common_transcript_dirs:
+        transcript_dir = repo_root / dir_name
+        if transcript_dir.exists() and transcript_dir.is_dir():
+            for jsonl_file in sorted(transcript_dir.glob("*.jsonl")):
+                if jsonl_file.is_file() and str(jsonl_file) not in transcripts:
+                    transcripts.append(str(jsonl_file))
+
+    return sorted(list(set(transcripts)))  # Deduplicate and sort
 
 
 def _discover_skills(root: Path) -> list[Artifact]:
