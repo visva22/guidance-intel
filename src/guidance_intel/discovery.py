@@ -33,15 +33,20 @@ def discover_transcripts(repo_path: str, transcripts_path: str | None = None) ->
     if not project_dir:
         return []
 
-    sessions_dir = project_dir / "sessions"
-    if not sessions_dir.exists():
-        return []
-
     transcripts = []
-    for session_dir in sorted(sessions_dir.iterdir()):
-        transcript = session_dir / "transcript.jsonl"
-        if transcript.exists():
-            transcripts.append(str(transcript))
+
+    # First check for UUID-named JSONL files directly in project folder (current Claude Code format)
+    for jsonl_file in sorted(project_dir.glob("*.jsonl")):
+        if jsonl_file.is_file():
+            transcripts.append(str(jsonl_file))
+
+    # Also check legacy sessions/ subdirectory structure
+    sessions_dir = project_dir / "sessions"
+    if sessions_dir.exists():
+        for session_dir in sorted(sessions_dir.iterdir()):
+            transcript = session_dir / "transcript.jsonl"
+            if transcript.exists():
+                transcripts.append(str(transcript))
 
     return transcripts
 
@@ -377,6 +382,12 @@ def _find_project_dir(claude_dir: Path, repo_path: str) -> Path | None:
 
     safe_name = abs_path.replace("/", "-").strip("-")
     candidate = claude_dir / safe_name
+    if candidate.exists():
+        return candidate
+
+    # Also check with leading hyphen (Claude Code stores projects as -Users-...-project-name)
+    safe_name_with_hyphen = "-" + safe_name
+    candidate = claude_dir / safe_name_with_hyphen
     if candidate.exists():
         return candidate
 
