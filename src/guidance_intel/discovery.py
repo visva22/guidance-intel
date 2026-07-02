@@ -1,3 +1,15 @@
+"""Discovery for all AI coding assistants using industry-standard patterns.
+
+Auto-discovers artifacts from multiple platforms:
+- Claude Code (.claude/)
+- GitHub Copilot (.github/copilot/)
+- Cursor AI (.cursor/)
+- Generic convention (.agents/)
+- And more...
+
+See docs/discovery-spec.md for full specification.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -8,355 +20,423 @@ from pathlib import Path
 
 from .models import Artifact
 
+# Industry-standard directory patterns for AI coding assistants
+# Using wildcard patterns to match ANY tool's directory structure
+# See INDUSTRY_STANDARDS.md for conventions
+DISCOVERY_PATTERNS = {
+    "skill": [
+        # SKILL.md convention - matches .*/skills/*/SKILL.md or skills/*/SKILL.md
+        ("*/skills/*/SKILL.md", "parent_dir", True),  # Any dotfolder with skills/
+        ("skills/*/SKILL.md", "parent_dir", True),    # No dotfolder
+        # Standalone prompts (not in skill directories)
+        ("prompts/**/*.md", "stem", False),
+        ("prompts/**/*.txt", "stem", False),
+        ("prompts/**/*.prompt", "stem", False),
+        ("*/prompts/**/*.md", "stem", False),  # Any dotfolder with prompts/
+    ],
+    "agent": [
+        # Special files
+        ("AGENTS.md", "special:agents_md", False),  # Agent registry
+        # .agent.md suffix convention - matches any location
+        ("*/agents/*/*.agent.md", "stem", False),   # Any dotfolder with agents/
+        ("agents/*/*.agent.md", "stem", False),     # No dotfolder
+        # Direct .md files in agents/ directory
+        ("*/agents/*.md", "stem", False),           # Any dotfolder
+        ("agents/*.md", "stem", False),             # No dotfolder
+    ],
+    "workflow": [
+        # Generic workflow patterns - any dotfolder or no dotfolder
+        ("*/workflows/*.yaml", "stem", False),
+        ("*/workflows/*.yml", "stem", False),
+        ("*/workflows/*.md", "stem", False),
+        ("*/workflows/*.json", "stem", False),
+        ("workflows/*.yaml", "stem", False),
+        ("workflows/*.yml", "stem", False),
+        ("workflows/*.md", "stem", False),
+        ("workflows/*.json", "stem", False),
+        # Tool definitions (common pattern)
+        ("*/tools/**/*.yaml", "stem", False),
+        ("*/tools/**/*.yml", "stem", False),
+        ("*/tools/**/*.json", "stem", False),
+        ("tools/**/*.yaml", "stem", False),
+        ("tools/**/*.yml", "stem", False),
+        ("tools/**/*.json", "stem", False),
+    ],
+    "instruction": [
+        # Root-level instruction files (common naming patterns)
+        ("CLAUDE.md", "special:instruction", False),
+        ("INSTRUCTIONS.md", "special:instruction", False),
+        ("AI_INSTRUCTIONS.md", "special:instruction", False),
+        ("SYSTEM_PROMPT.md", "special:instruction", False),
+        # Instruction files in any dotfolder
+        ("*/CLAUDE.md", "special:instruction", False),
+        ("*/INSTRUCTIONS.md", "special:instruction", False),
+        ("*/instructions.md", "special:instruction", False),
+        ("*/rules.md", "special:instruction", False),
+    ],
+    "command": [
+        ("*/commands/**/*.md", "stem", False),
+        ("*/commands/**/*.yaml", "stem", False),
+        ("*/commands/**/*.yml", "stem", False),
+        ("commands/**/*.md", "stem", False),
+        ("commands/**/*.yaml", "stem", False),
+        ("commands/**/*.yml", "stem", False),
+    ],
+    "template": [
+        ("*/templates/**/*.md", "stem", False),
+        ("*/templates/**/*.txt", "stem", False),
+        ("*/templates/**/*.j2", "stem", False),
+        ("*/templates/**/*.jinja", "stem", False),
+        ("*/templates/**/*.template", "stem", False),
+        ("templates/**/*.md", "stem", False),
+        ("templates/**/*.txt", "stem", False),
+        ("templates/**/*.j2", "stem", False),
+        ("templates/**/*.jinja", "stem", False),
+    ],
+    "config": [
+        ("*/settings.json", "special:config", False),
+        ("*/settings.local.json", "special:config", False),
+        ("*/config.json", "special:config", False),
+        ("*/config.yaml", "special:config", False),
+        ("*/config.yml", "special:config", False),
+    ],
+    "tool": [
+        ("*/tools/**/*.yaml", "stem", False),
+        ("*/tools/**/*.yml", "stem", False),
+        ("*/tools/**/*.json", "stem", False),
+        ("tools/**/*.yaml", "stem", False),
+        ("tools/**/*.yml", "stem", False),
+        ("tools/**/*.json", "stem", False),
+    ],
+    "context": [
+        ("*/context/**/*.md", "stem", False),
+        ("*/context/**/*.txt", "stem", False),
+        ("context/**/*.md", "stem", False),
+        ("context/**/*.txt", "stem", False),
+    ],
+    "persona": [
+        ("*/personas/**/*.md", "stem", False),
+        ("*/personas/**/*.yaml", "stem", False),
+        ("personas/**/*.md", "stem", False),
+        ("personas/**/*.yaml", "stem", False),
+    ],
+    "example": [
+        ("*/examples/**/*.md", "stem", False),
+        ("examples/**/*.md", "stem", False),
+    ],
+    "prompt": [
+        ("*/prompts/**/*.md", "stem", False),
+        ("*/prompts/**/*.txt", "stem", False),
+        ("*/prompts/**/*.prompt", "stem", False),
+        ("prompts/**/*.md", "stem", False),
+        ("prompts/**/*.txt", "stem", False),
+        ("prompts/**/*.prompt", "stem", False),
+    ],
+    "memory": [
+        ("*/memory/**/*.md", "stem", False),
+        ("memory/**/*.md", "stem", False),
+    ],
+}
+
+# Transcript patterns by platform
+TRANSCRIPT_PATTERNS = {
+    "claude": [
+        ("~/.claude/projects/{project}/*.jsonl", "direct"),
+        ("~/.claude/projects/{project}/sessions/*/transcript.jsonl", "sessions"),
+    ],
+    "langchain": [
+        (".langchain/*.jsonl", "direct"),
+        (".langchain/sessions/*.jsonl", "direct"),
+        ("~/.langchain/*.jsonl", "direct"),
+        ("~/.langchain/sessions/*.jsonl", "direct"),
+    ],
+    "crewai": [
+        (".crewai/*.jsonl", "direct"),
+        (".crewai/sessions/*.jsonl", "direct"),
+        (".crewai/logs/*.jsonl", "direct"),
+        ("~/.crewai/*.jsonl", "direct"),
+        ("~/.crewai/sessions/*.jsonl", "direct"),
+        ("~/.crewai/logs/*.jsonl", "direct"),
+    ],
+    "generic": [
+        (".sessions/**/*.jsonl", "direct"),
+        ("sessions/**/*.jsonl", "direct"),
+        (".transcripts/**/*.jsonl", "direct"),
+        ("transcripts/**/*.jsonl", "direct"),
+        (".logs/**/*.jsonl", "direct"),
+        ("logs/**/*.jsonl", "direct"),
+    ],
+}
+
 
 def discover_artifacts(repo_path: str) -> list[Artifact]:
+    """Auto-discover all artifacts from any AI assistant using industry-standard patterns.
+
+    Args:
+        repo_path: Absolute path to repository root.
+
+    Returns:
+        List of discovered artifacts.
+    """
     root = Path(repo_path)
     artifacts = []
+    seen = set()  # Deduplication: (kind, name, source_path)
 
-    artifacts.extend(_discover_skills(root))
-    artifacts.extend(_discover_agents(root))
-    artifacts.extend(_discover_workflows(root))
-    artifacts.extend(_discover_instructions(root))
+    for kind, patterns in DISCOVERY_PATTERNS.items():
+        for pattern, name_strategy, extract_triggers in patterns:
+            discovered = _discover_pattern(root, kind, pattern, name_strategy, extract_triggers)
+            for artifact in discovered:
+                key = (artifact.kind, artifact.name, artifact.source_path)
+                if key not in seen:
+                    seen.add(key)
+                    artifacts.append(artifact)
 
     return artifacts
 
 
 def discover_transcripts(repo_path: str, transcripts_path: str | None = None) -> list[str]:
+    """Auto-discover transcript files from all AI assistants.
+
+    Args:
+        repo_path: Absolute path to repository root.
+        transcripts_path: Optional explicit path to transcripts (overrides auto-discovery).
+
+    Returns:
+        List of transcript file paths.
+    """
     if transcripts_path:
         return _find_jsonl_files(Path(transcripts_path))
 
     transcripts = []
+    seen = set()
 
-    # Check multiple agent platform locations
-    # Claude Code: ~/.claude/projects/{project-dir}/*.jsonl or {project-dir}/sessions/*/transcript.jsonl
-    claude_dir = Path.home() / ".claude" / "projects"
-    if claude_dir.exists():
-        project_dir = _find_project_dir(claude_dir, repo_path)
-        if project_dir:
-            # UUID-named JSONL files directly in project folder
-            for jsonl_file in sorted(project_dir.glob("*.jsonl")):
-                if jsonl_file.is_file():
-                    transcripts.append(str(jsonl_file))
-            # Legacy sessions/ subdirectory structure
-            sessions_dir = project_dir / "sessions"
-            if sessions_dir.exists():
-                for session_dir in sorted(sessions_dir.iterdir()):
-                    transcript = session_dir / "transcript.jsonl"
-                    if transcript.exists():
-                        transcripts.append(str(transcript))
+    # Check Claude Code transcripts
+    transcripts.extend(_discover_claude_transcripts(repo_path))
 
-    # LangChain: .langchain/ in repo or ~/.langchain/
-    langchain_dirs = [
-        Path(repo_path) / ".langchain",
-        Path.home() / ".langchain",
-    ]
-    for base_dir in langchain_dirs:
-        if base_dir.exists():
-            # Check for sessions/ subdirectory
-            sessions_dir = base_dir / "sessions"
-            if sessions_dir.exists():
-                for session_file in sorted(sessions_dir.glob("*.jsonl")):
-                    if session_file.is_file():
-                        transcripts.append(str(session_file))
-            # Also check root for JSONL files
-            for jsonl_file in sorted(base_dir.glob("*.jsonl")):
-                if jsonl_file.is_file() and str(jsonl_file) not in transcripts:
-                    transcripts.append(str(jsonl_file))
-
-    # CrewAI: .crewai/ in repo or ~/.crewai/
-    crewai_dirs = [
-        Path(repo_path) / ".crewai",
-        Path.home() / ".crewai",
-    ]
-    for base_dir in crewai_dirs:
-        if base_dir.exists():
-            # Check for sessions/ or logs/ subdirectories
-            for subdir_name in ["sessions", "logs"]:
-                subdir = base_dir / subdir_name
-                if subdir.exists():
-                    for session_file in sorted(subdir.glob("*.jsonl")):
-                        if session_file.is_file() and str(session_file) not in transcripts:
-                            transcripts.append(str(session_file))
-            # Also check root for JSONL files
-            for jsonl_file in sorted(base_dir.glob("*.jsonl")):
-                if jsonl_file.is_file() and str(jsonl_file) not in transcripts:
-                    transcripts.append(str(jsonl_file))
-
-    # Generic fallback: check repo root for common patterns
+    # Check LangChain transcripts
     repo_root = Path(repo_path)
+    for base_dir in [repo_root / ".langchain", Path.home() / ".langchain"]:
+        if base_dir.exists():
+            for sessions_dir in [base_dir / "sessions", base_dir]:
+                if sessions_dir.exists():
+                    for jsonl_file in sorted(sessions_dir.glob("*.jsonl")):
+                        if jsonl_file.is_file() and str(jsonl_file) not in seen:
+                            seen.add(str(jsonl_file))
+                            transcripts.append(str(jsonl_file))
+
+    # Check CrewAI transcripts
+    for base_dir in [repo_root / ".crewai", Path.home() / ".crewai"]:
+        if base_dir.exists():
+            for subdir_name in ["sessions", "logs", "."]:
+                subdir = base_dir / subdir_name if subdir_name != "." else base_dir
+                if subdir.exists():
+                    for jsonl_file in sorted(subdir.glob("*.jsonl")):
+                        if jsonl_file.is_file() and str(jsonl_file) not in seen:
+                            seen.add(str(jsonl_file))
+                            transcripts.append(str(jsonl_file))
+
+    # Generic fallback
     common_transcript_dirs = [".sessions", "sessions", ".transcripts", "transcripts", ".logs", "logs"]
     for dir_name in common_transcript_dirs:
         transcript_dir = repo_root / dir_name
         if transcript_dir.exists() and transcript_dir.is_dir():
             for jsonl_file in sorted(transcript_dir.glob("*.jsonl")):
-                if jsonl_file.is_file() and str(jsonl_file) not in transcripts:
+                if jsonl_file.is_file() and str(jsonl_file) not in seen:
+                    seen.add(str(jsonl_file))
                     transcripts.append(str(jsonl_file))
 
-    return sorted(list(set(transcripts)))  # Deduplicate and sort
+    return sorted(list(seen))
 
 
-def _discover_skills(root: Path) -> list[Artifact]:
-    """Discover skills using multiple common patterns."""
+def _discover_pattern(
+    root: Path,
+    kind: str,
+    pattern: str,
+    name_strategy: str,
+    extract_triggers: bool
+) -> list[Artifact]:
+    """Discover artifacts matching a single pattern.
+
+    Args:
+        root: Repository root path.
+        kind: Artifact kind.
+        pattern: Glob pattern to match.
+        name_strategy: How to derive artifact name ("stem", "parent_dir", "special:*").
+        extract_triggers: Whether to extract triggers from file content.
+
+    Returns:
+        List of artifacts matching this pattern.
+    """
     artifacts = []
-    seen_names = set()
 
-    # Pattern 1: .claude/skills/*/SKILL.md (Claude Code standard)
-    skills_dir = root / ".claude" / "skills"
-    if skills_dir.exists():
-        for skill_dir in sorted(skills_dir.iterdir()):
-            if not skill_dir.is_dir():
+    # Handle special parsing strategies
+    if name_strategy.startswith("special:"):
+        special_type = name_strategy.split(":", 1)[1]
+        return _discover_special(root, kind, pattern, special_type)
+
+    # Standard glob-based discovery
+    try:
+        for file_path in sorted(root.glob(pattern)):
+            # Skip symlinks (we'll discover the real file)
+            if not file_path.is_file() or file_path.is_symlink():
                 continue
-            name = skill_dir.name
-            if name in seen_names:
+
+            # Skip common documentation files that aren't artifacts
+            if file_path.name in {"README.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE.md"}:
                 continue
-            seen_names.add(name)
 
-            skill_md = skill_dir / "SKILL.md"
-            source = str(skill_md.relative_to(root)) if skill_md.exists() else str(skill_dir.relative_to(root))
-            triggers = [name, f"/{name}"]
+            # Skip non-AI dotfolders (IDE configs, etc.)
+            path_parts = file_path.parts
+            non_ai_dotfolders = {".vscode", ".idea", ".git", ".svn", ".hg", ".DS_Store", "node_modules"}
+            if any(part in non_ai_dotfolders for part in path_parts):
+                continue
 
-            if skill_md.exists():
-                triggers.extend(_extract_triggers_from_file(skill_md))
+            # Skip reference/support files inside skill directories (applies to ALL platforms)
+            if kind == "skill":
+                path_parts = file_path.parts
 
-            artifacts.append(Artifact(name=name, kind="skill", source_path=source, triggers=triggers))
-
-    # Pattern 2: .agents/skills/**/SKILL.md (custom agent frameworks)
-    # Only discover SKILL.md files; other .md files in skill dirs are references/metadata
-    agents_skills_dir = root / ".agents" / "skills"
-    if agents_skills_dir.exists():
-        for skill_md in sorted(agents_skills_dir.rglob("SKILL.md")):
-            if skill_md.is_file():
-                # Use parent directory name as skill name
-                name = skill_md.parent.name
-
-                if name in seen_names:
+                # Rule 1: Skip files in references/ subdirectory
+                if "references" in path_parts:
                     continue
-                seen_names.add(name)
 
-                source = str(skill_md.relative_to(root))
-                triggers = [name, f"/{name}"]
-                triggers.extend(_extract_triggers_from_file(skill_md))
-
-                artifacts.append(Artifact(name=name, kind="skill", source_path=source, triggers=triggers))
-
-    # Pattern 3: skills/**/*.md (generic skills directory)
-    skills_root = root / "skills"
-    if skills_root.exists():
-        for md_file in sorted(skills_root.rglob("*.md")):
-            if md_file.is_file():
-                # Try to use directory name for structure, fallback to filename
-                if md_file.parent != skills_root:
-                    name = md_file.parent.name
-                else:
-                    name = md_file.stem
-
-                if name in seen_names:
-                    continue
-                seen_names.add(name)
-
-                source = str(md_file.relative_to(root))
-                triggers = [name, f"/{name}"]
-                triggers.extend(_extract_triggers_from_file(md_file))
-
-                artifacts.append(Artifact(name=name, kind="skill", source_path=source, triggers=triggers))
-
-    # Pattern 4: prompts/**/*.{md,txt,prompt} (prompt libraries)
-    prompts_dir = root / "prompts"
-    if prompts_dir.exists():
-        for ext in ["*.md", "*.txt", "*.prompt"]:
-            for prompt_file in sorted(prompts_dir.rglob(ext)):
-                if prompt_file.is_file():
-                    name = prompt_file.stem
-
-                    if name in seen_names:
+                # Rule 2: If SKILL.md exists in the same directory, only discover SKILL.md
+                if "skills" in path_parts and file_path.name != "SKILL.md":
+                    parent_dir = file_path.parent
+                    # Skip if there's a SKILL.md sibling (this is a reference/support file)
+                    if (parent_dir / "SKILL.md").exists():
                         continue
-                    seen_names.add(name)
+                    # Skip if there's a SKILL.md in parent (this is in a subdirectory like references/)
+                    if parent_dir.parent and (parent_dir.parent / "SKILL.md").exists():
+                        continue
 
-                    source = str(prompt_file.relative_to(root))
-                    triggers = [name, f"/{name}"]
+                # Rule 3: Skip common reference file names regardless of location
+                reference_filenames = {"TEST_PLAN.md", "README.md", "NOTES.md", "CHANGELOG.md"}
+                if file_path.name in reference_filenames and "skills" in path_parts:
+                    continue
 
-                    artifacts.append(Artifact(name=name, kind="skill", source_path=source, triggers=triggers))
-
-    return artifacts
-
-
-def _discover_agents(root: Path) -> list[Artifact]:
-    """Discover agents using multiple common patterns."""
-    artifacts = []
-    seen_names = set()
-
-    # Pattern 1: AGENTS.md (Claude Code standard)
-    agents_md = root / "AGENTS.md"
-    if agents_md.exists():
-        agents = _parse_agents_md(agents_md)
-        for name in agents:
-            if name not in seen_names:
-                seen_names.add(name)
-                artifacts.append(Artifact(
-                    name=name,
-                    kind="agent",
-                    source_path=str(agents_md.relative_to(root)),
-                    triggers=[name, name.lower()],
-                ))
-
-    # Pattern 2: .claude/agents/*.md (individual agent files)
-    claude_agents_dir = root / ".claude" / "agents"
-    if claude_agents_dir.exists():
-        for f in sorted(claude_agents_dir.iterdir()):
-            if f.suffix == ".md":
-                name = f.stem
-                if name not in seen_names:
-                    seen_names.add(name)
-                    artifacts.append(Artifact(
-                        name=name,
-                        kind="agent",
-                        source_path=str(f.relative_to(root)),
-                        triggers=[name, name.lower()],
-                    ))
-
-    # Pattern 3: .agents/**/*.md (custom agent frameworks)
-    # Skip .agents/skills/ to avoid duplication with skill discovery
-    agents_dir = root / ".agents"
-    if agents_dir.exists():
-        for md_file in sorted(agents_dir.rglob("*.md")):
-            if md_file.is_file() and md_file.name != "AGENTS.md":
-                # Skip files in .agents/skills/ directory (already discovered as skills)
+            # Skip .agents/skills/ when discovering agents (avoid duplication)
+            if kind == "agent":
                 try:
-                    rel_path = md_file.relative_to(agents_dir)
-                    if rel_path.parts[0] == "skills":
-                        continue
-                except (ValueError, IndexError):
+                    if ".agents" in file_path.parts:
+                        rel_parts = file_path.relative_to(root / ".agents").parts
+                        if len(rel_parts) > 0 and rel_parts[0] == "skills":
+                            continue
+                    # Also skip nested subdirectories under plan/sdd (like .agents/plan/sdd/*)
+                    if ".agents" in file_path.parts:
+                        rel_parts = file_path.relative_to(root / ".agents").parts
+                        # Skip anything more than 2 levels deep under .agents/ (except agents/ subdir)
+                        if len(rel_parts) > 2 and rel_parts[0] != "agents":
+                            continue
+                except ValueError:
                     pass
 
-                name = md_file.stem
-                if name not in seen_names:
-                    seen_names.add(name)
-                    artifacts.append(Artifact(
-                        name=name,
-                        kind="agent",
-                        source_path=str(md_file.relative_to(root)),
-                        triggers=[name, name.lower()],
-                    ))
+            # Derive name based on strategy
+            if name_strategy == "stem":
+                name = file_path.stem
+            elif name_strategy == "parent_dir":
+                name = file_path.parent.name
+            else:
+                name = file_path.name
 
-    # Pattern 4: agents/**/*.md (generic agents directory)
-    agents_root = root / "agents"
-    if agents_root.exists():
-        for md_file in sorted(agents_root.rglob("*.md")):
-            if md_file.is_file() and md_file.name != "AGENTS.md":
-                name = md_file.stem
-                if name not in seen_names:
-                    seen_names.add(name)
-                    artifacts.append(Artifact(
-                        name=name,
-                        kind="agent",
-                        source_path=str(md_file.relative_to(root)),
-                        triggers=[name, name.lower()],
-                    ))
+            # Build triggers
+            triggers = [name, f"/{name}"]
+            if extract_triggers:
+                triggers.extend(_extract_triggers_from_file(file_path))
 
-    return artifacts
-
-
-def _discover_workflows(root: Path) -> list[Artifact]:
-    """Discover workflows using multiple common patterns."""
-    artifacts = []
-    seen_names = set()
-
-    # Pattern 1: .claude/workflows/*.{yaml,yml,md} (Claude Code standard)
-    claude_workflows_dir = root / ".claude" / "workflows"
-    if claude_workflows_dir.exists():
-        for f in sorted(claude_workflows_dir.iterdir()):
-            if f.suffix in (".yaml", ".yml", ".md"):
-                name = f.stem
-                if name not in seen_names:
-                    seen_names.add(name)
-                    artifacts.append(Artifact(
-                        name=name,
-                        kind="workflow",
-                        source_path=str(f.relative_to(root)),
-                        triggers=[name],
-                    ))
-
-    # Pattern 2: workflows/**/*.{yaml,yml,md,json} (generic workflows directory)
-    workflows_root = root / "workflows"
-    if workflows_root.exists():
-        for ext in [".yaml", ".yml", ".md", ".json"]:
-            for wf_file in sorted(workflows_root.rglob(f"*{ext}")):
-                if wf_file.is_file():
-                    name = wf_file.stem
-                    if name not in seen_names:
-                        seen_names.add(name)
-                        artifacts.append(Artifact(
-                            name=name,
-                            kind="workflow",
-                            source_path=str(wf_file.relative_to(root)),
-                            triggers=[name],
-                        ))
-
-    # Pattern 3: .agents/workflows/*.{yaml,yml,md} (custom agent frameworks)
-    agents_workflows_dir = root / ".agents" / "workflows"
-    if agents_workflows_dir.exists():
-        for ext in [".yaml", ".yml", ".md", ".json"]:
-            for wf_file in sorted(agents_workflows_dir.rglob(f"*{ext}")):
-                if wf_file.is_file():
-                    name = wf_file.stem
-                    if name not in seen_names:
-                        seen_names.add(name)
-                        artifacts.append(Artifact(
-                            name=name,
-                            kind="workflow",
-                            source_path=str(wf_file.relative_to(root)),
-                            triggers=[name],
-                        ))
-
-    # Pattern 4: tools/**/*.{yaml,yml,json} (LangChain/CrewAI style)
-    tools_dir = root / "tools"
-    if tools_dir.exists():
-        for ext in [".yaml", ".yml", ".json"]:
-            for tool_file in sorted(tools_dir.rglob(f"*{ext}")):
-                if tool_file.is_file():
-                    name = tool_file.stem
-                    if name not in seen_names:
-                        seen_names.add(name)
-                        artifacts.append(Artifact(
-                            name=name,
-                            kind="workflow",  # treat tools as workflow-like artifacts
-                            source_path=str(tool_file.relative_to(root)),
-                            triggers=[name],
-                        ))
-
-    return artifacts
-
-
-def _discover_instructions(root: Path) -> list[Artifact]:
-    """Discover instruction files using multiple common patterns."""
-    artifacts = []
-    seen_paths = set()
-
-    # Common instruction file patterns
-    instruction_patterns = [
-        root / "CLAUDE.md",
-        root / ".claude" / "CLAUDE.md",
-        root / "INSTRUCTIONS.md",
-        root / ".agents" / "INSTRUCTIONS.md",
-        root / "AI_INSTRUCTIONS.md",
-        root / "SYSTEM_PROMPT.md",
-        root / ".ai" / "instructions.md",
-    ]
-
-    for path in instruction_patterns:
-        if path.exists() and path not in seen_paths:
-            seen_paths.add(path)
-            rel = str(path.relative_to(root))
             artifacts.append(Artifact(
-                name=f"instructions:{rel}",
-                kind="instruction",
-                source_path=rel,
-                triggers=[],
+                name=name,
+                kind=kind,
+                source_path=str(file_path.relative_to(root)),
+                triggers=triggers
             ))
+    except (OSError, ValueError):
+        # Pattern doesn't match or invalid path
+        pass
+
+    return artifacts
+
+
+def _discover_special(root: Path, kind: str, pattern: str, special_type: str) -> list[Artifact]:
+    """Handle special discovery cases requiring custom parsing logic.
+
+    Args:
+        root: Repository root path.
+        kind: Artifact kind.
+        pattern: File pattern to match (can include wildcards).
+        special_type: Type of special handler.
+
+    Returns:
+        List of artifacts.
+    """
+    artifacts = []
+
+    try:
+        # Support glob patterns in special handlers
+        if "*" in pattern:
+            matched_files = list(root.glob(pattern))
+        else:
+            file_path = root / pattern
+            matched_files = [file_path] if file_path.exists() else []
+
+        for file_path in matched_files:
+            if not file_path.is_file():
+                continue
+
+            # Skip non-AI dotfolders
+            path_parts = file_path.parts
+            non_ai_dotfolders = {".vscode", ".idea", ".git", ".svn", ".hg", "node_modules"}
+            if any(part in non_ai_dotfolders for part in path_parts):
+                continue
+
+            rel_path = str(file_path.relative_to(root))
+
+            if special_type == "agents_md":
+                # Parse AGENTS.md to extract agent names
+                agent_names = _parse_agents_md(file_path)
+                if agent_names:
+                    # Found actual agent definitions
+                    for name in agent_names:
+                        artifacts.append(Artifact(
+                            name=name,
+                            kind="agent",
+                            source_path=rel_path,
+                            triggers=[name, name.lower()]
+                        ))
+                else:
+                    # No agent definitions found - treat as instruction document
+                    artifacts.append(Artifact(
+                        name=f"instructions:{rel_path}",
+                        kind="instruction",
+                        source_path=rel_path,
+                        triggers=[]
+                    ))
+
+            elif special_type == "instruction":
+                # Generic instruction file
+                artifacts.append(Artifact(
+                    name=f"instructions:{rel_path}",
+                    kind="instruction",
+                    source_path=rel_path,
+                    triggers=[]
+                ))
+
+            elif special_type == "config":
+                # Configuration file
+                artifacts.append(Artifact(
+                    name=f"config:{file_path.name}",
+                    kind="config",
+                    source_path=rel_path,
+                    triggers=[]
+                ))
+
+    except (OSError, ValueError):
+        pass
+
     return artifacts
 
 
 def _extract_triggers_from_file(path: Path) -> list[str]:
+    """Extract trigger patterns from a file."""
     try:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -377,28 +457,79 @@ def _extract_triggers_from_file(path: Path) -> list[str]:
 
 
 def _parse_agents_md(path: Path) -> list[str]:
+    """Parse AGENTS.md to extract agent names.
+
+    CONSERVATIVE approach: Only extracts lowercase-kebab-case agent names (e.g., "my-agent").
+    ALL CAPS or Title Case headers are assumed to be documentation sections, not agents.
+
+    If no valid agent names are found, treats the entire file as an instruction document
+    (returns empty list so special handler treats it as instruction).
+    """
     try:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return []
 
     agents = []
+
     for line in content.splitlines():
-        match = re.match(r"^#{1,3}\s+(.+)", line)
+        # Only look for H2 (##) or H3 (###) headers - NOT H1 (#)
+        match = re.match(r"^#{2,3}\s+(.+)", line)
         if match:
             name = match.group(1).strip()
-            if name.lower() not in ("agents", "available agents", "agent types"):
+
+            # STRICT CRITERIA: Only kebab-case lowercase names are agents
+            # Examples: "local-search", "qdrant-memory", "sdlc-executor"
+            # This excludes:
+            # - ALL CAPS: "ROLE", "CORE MISSION" (documentation)
+            # - Title Case: "Phase 1", "Session Summary" (documentation)
+            # - CamelCase: "ExecutorAgent" (rare, but if needed add pattern)
+
+            # Must contain a hyphen and be mostly lowercase
+            if "-" in name and name.islower():
                 agents.append(name)
             continue
 
-        match = re.match(r"^-\s+\*\*(\w[\w\s-]*)\*\*", line)
+        # Also look for bold list items like: - **agent-name**
+        match = re.match(r"^-\s+\*\*([a-z][a-z0-9-]*)\*\*", line)
         if match:
-            agents.append(match.group(1).strip())
+            name = match.group(1).strip()
+            if "-" in name:  # Only kebab-case agents
+                agents.append(name)
 
     return agents
 
 
-def _find_project_dir(claude_dir: Path, repo_path: str) -> Path | None:
+def _discover_claude_transcripts(repo_path: str) -> list[str]:
+    """Discover Claude Code transcripts."""
+    transcripts = []
+
+    claude_dir = Path.home() / ".claude" / "projects"
+    if not claude_dir.exists():
+        return transcripts
+
+    project_dir = _find_claude_project_dir(claude_dir, repo_path)
+    if not project_dir:
+        return transcripts
+
+    # UUID-named JSONL files directly in project folder
+    for jsonl_file in sorted(project_dir.glob("*.jsonl")):
+        if jsonl_file.is_file():
+            transcripts.append(str(jsonl_file))
+
+    # Legacy sessions/ subdirectory structure
+    sessions_dir = project_dir / "sessions"
+    if sessions_dir.exists():
+        for session_dir in sorted(sessions_dir.iterdir()):
+            transcript = session_dir / "transcript.jsonl"
+            if transcript.exists():
+                transcripts.append(str(transcript))
+
+    return transcripts
+
+
+def _find_claude_project_dir(claude_dir: Path, repo_path: str) -> Path | None:
+    """Find the Claude project directory for the given repo."""
     abs_path = os.path.abspath(repo_path)
 
     for project_dir in claude_dir.iterdir():
@@ -436,6 +567,7 @@ def _find_project_dir(claude_dir: Path, repo_path: str) -> Path | None:
 
 
 def _find_jsonl_files(path: Path) -> list[str]:
+    """Find all JSONL files in a path."""
     if path.is_file() and path.suffix == ".jsonl":
         return [str(path)]
 
