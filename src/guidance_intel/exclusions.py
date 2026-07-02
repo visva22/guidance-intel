@@ -4,6 +4,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+# Token estimation: rough heuristic of 1 token ≈ 4 characters (common for English text).
+# Actual token count varies by model and content, but this provides a consistent estimate.
+CHARS_PER_TOKEN = 4
+
+# Claude Code Read tool defaults (when offset/limit not specified or limit=None).
+# Used to avoid over-counting unbounded reads as "reading entire file to EOF."
+DEFAULT_READ_LIMIT = 2000
+
 
 def parse_frontmatter_exclusion(file_path: str | Path) -> tuple[bool, str]:
     """
@@ -91,11 +99,11 @@ def scan_excluded_files(repo_path: str) -> dict[str, str]:
 
 
 def estimate_file_tokens(file_path: str | Path) -> int:
-    """Estimate tokens in a file (rough estimate: 1 token ≈ 4 chars)."""
+    """Estimate tokens in a file using CHARS_PER_TOKEN heuristic."""
     try:
         with open(file_path, encoding="utf-8") as f:
             content = f.read()
-        return len(content) // 4
+        return len(content) // CHARS_PER_TOKEN
     except (OSError, UnicodeDecodeError):
         return 0
 
@@ -106,6 +114,9 @@ def estimate_read_tokens(file_path: str | Path, offset: int | None = None, limit
     Uses offset/limit (from the Read tool) to count only the lines that were
     loaded, rather than the whole file — so partial reads aren't over-counted.
     Falls back to the whole-file estimate when no range is given.
+
+    When limit is None but offset is specified, assumes Claude Code's default
+    limit (DEFAULT_READ_LIMIT) rather than reading to EOF to avoid over-counting.
     """
     if offset is None and limit is None:
         return estimate_file_tokens(file_path)
@@ -116,6 +127,7 @@ def estimate_read_tokens(file_path: str | Path, offset: int | None = None, limit
         return 0
     start = offset if offset is not None else 0
     start = max(0, start)
-    end = start + limit if limit is not None else len(lines)
+    end = start + (limit if limit is not None else DEFAULT_READ_LIMIT)
+    end = min(end, len(lines))
     chunk = "".join(lines[start:end])
-    return len(chunk) // 4
+    return len(chunk) // CHARS_PER_TOKEN

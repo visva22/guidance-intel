@@ -14,6 +14,14 @@ from pathlib import Path
 
 from .models import TranscriptEvent
 
+# Causal chain traversal limit: prevents infinite loops in malformed transcripts
+# while allowing deep nesting (workflows, multi-turn deferred requests).
+MAX_CAUSAL_CHAIN_HOPS = 200
+
+# Heuristic lookback limit: when causal fields are absent, how many recent user
+# messages to check. Balances false matches (too many) vs missed deferred requests.
+HEURISTIC_LOOKBACK = 3
+
 _ACTION_VERBS = ("read", "check", "review", "look at", "open", "see", "load", "inspect", "execute")
 _STOPWORDS = {"the", "a", "an", "md", "txt", "and", "or", "to", "of", "for", "in", "file", "doc", "docs"}
 
@@ -76,14 +84,21 @@ def _resolve_user_turn(
     read_event: TranscriptEvent,
     index: dict[str, TranscriptEvent],
 ) -> TranscriptEvent | None:
-    """Walk parent_uuid links back to the originating user_message."""
+    """Walk parent_uuid links back to the originating user_message.
+
+    Tracks visited node UUIDs (not just parent_uuid) to properly detect cycles
+    in malformed transcripts.
+    """
     seen = set()
     cur = read_event
     hops = 0
-    while cur is not None and hops < 200:
-        if cur.parent_uuid is None or cur.parent_uuid in seen:
+    while cur is not None and hops < MAX_CAUSAL_CHAIN_HOPS:
+        if cur.uuid:
+            if cur.uuid in seen:
+                break  # Cycle detected
+            seen.add(cur.uuid)
+        if cur.parent_uuid is None:
             break
-        seen.add(cur.parent_uuid)
         parent = index.get(cur.parent_uuid)
         if parent is None:
             break
@@ -135,7 +150,11 @@ def _classify_heuristic(
     events: list[TranscriptEvent],
     file_path: str,
 ) -> Classification:
-    """Positional fallback: match against nearest preceding user_message in-session."""
+    """Positional fallback: match against nearest preceding user_message in-session.
+
+    Looks back at most HEURISTIC_LOOKBACK user messages. This limit prevents
+    false matches in long sessions while catching recent explicit mentions.
+    """
     try:
         idx = events.index(read_event)
     except ValueError:
@@ -148,7 +167,7 @@ def _classify_heuristic(
             continue
         if e.kind == "user_message":
             user_msgs.append((idx - i, e))
-        if len(user_msgs) >= 3:
+        if len(user_msgs) >= HEURISTIC_LOOKBACK:
             break
 
     if not user_msgs:
@@ -160,7 +179,11 @@ def _classify_heuristic(
         match = _match_text(file_path, meta.get("text", ""), meta.get("mentions", []))
         if match is not None:
             # Downgrade confidence: positional matching is weaker than causal.
-            conf = "medium" if match.confidence == "high" else "low"
+            # Exception: explicit @mentions remain high-confidence regardless of method.
+            if match.reason.startswith("Explicit @mention"):
+                conf = match.confidence  # Keep HIGH for explicit mentions
+            else:
+                conf = "medium" if match.confidence == "high" else "low"
             return Classification(match.classification, conf, match.reason + " (positional)", "heuristic")
 
     return Classification("autonomous", "low", "No user reference in recent messages", "heuristic")

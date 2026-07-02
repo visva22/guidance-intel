@@ -111,7 +111,7 @@ def _parse_claude_code_line(line: str, session_id: str) -> list[TranscriptEvent]
     return events
 
 
-def _parse_tool_use(tool_use: dict, session_id: str, timestamp, causal: dict) -> TranscriptEvent | None:
+def _parse_tool_use(tool_use: dict, session_id: str, timestamp: str | None, causal: dict) -> TranscriptEvent | None:
     tool_name = tool_use.get("name", "")
     tool_input = tool_use.get("input", {})
 
@@ -175,7 +175,7 @@ def _looks_like_doc_name(file_path: str) -> bool:
     return bool(_DOC_NAME_RE.search(Path(file_path).name))
 
 
-def _parse_user_message(data: dict, session_id: str, timestamp, causal: dict) -> TranscriptEvent | None:
+def _parse_user_message(data: dict, session_id: str, timestamp: str | None, causal: dict) -> TranscriptEvent | None:
     """Extract genuine human text from a user line, or None if it's not human input."""
     # Tool-result payloads are logged as type:"user" but are tool output, not
     # the human. Meta lines are harness-injected. Neither is user intent.
@@ -214,7 +214,7 @@ def _parse_user_message(data: dict, session_id: str, timestamp, causal: dict) ->
     )
 
 
-def _parse_attachment(data: dict, session_id: str, timestamp, causal: dict) -> TranscriptEvent | None:
+def _parse_attachment(data: dict, session_id: str, timestamp: str | None, causal: dict) -> TranscriptEvent | None:
     """Capture @file mentions / attached files as explicit user file references."""
     attachment = data.get("attachment") or {}
     file_path = (

@@ -20,12 +20,19 @@ _INVOCATION_KINDS = {"skill", "agent", "workflow"}
 _PATH_REF_RE = re.compile(r"[\w./-]+\.(?:md|txt|yaml|yml|json|prompt)", re.IGNORECASE)
 
 
-def _read_events_from(invocation: TranscriptEvent, same_line, children_of) -> list[TranscriptEvent]:
+def _read_events_from(
+    invocation: TranscriptEvent,
+    same_line: dict[str, list[TranscriptEvent]],
+    children_of: dict[str, list[TranscriptEvent]],
+) -> list[TranscriptEvent]:
     """All Read events whose causal chain roots at this invocation event.
 
     Includes reads batched in the *same* assistant message as the invocation
     (they share one uuid in real transcripts, so they are siblings, not
     children) as well as reads in descendant messages.
+
+    For nested invocations (e.g., Skill A spawns Agent B), reads within B are
+    attributed to A with via_sidechain=True, giving the full context cost.
     """
     if not invocation.uuid:
         return []
@@ -46,9 +53,9 @@ def _read_events_from(invocation: TranscriptEvent, same_line, children_of) -> li
         if node.uuid in seen_uuids:
             continue
         seen_uuids.add(node.uuid)
-        # Another invocation starts its own scope — attribute its reads to it, not us.
-        if node.kind in _INVOCATION_KINDS and not _is_read(node):
-            continue
+        # Another invocation starts its own scope, but we still descend into it
+        # to capture nested reads (which are already marked via_sidechain).
+        # Don't stop traversal; just don't treat the invocation itself as a read.
         if _is_read(node):
             reads.append(node)
         stack.extend(children_of.get(node.uuid, []))
@@ -81,7 +88,7 @@ def _parse_closure(primary_path: Path) -> set[str]:
 
 
 def _leak_level(file_path: str, primary_source: str | None, in_closure: bool) -> str:
-    """Classify a non-primary read by location. '' when not a leak."""
+    """Classify a non-primary read by location. 'none' when not a leak."""
     if in_closure:
         return "none"
     fp_lower = file_path.lower()
@@ -89,9 +96,14 @@ def _leak_level(file_path: str, primary_source: str | None, in_closure: bool) ->
     if fp_lower.startswith(("~/.claude", "/users/")) and "/.claude/" in fp_lower:
         return "global"
     if "/skills/" in fp_lower or "/agents/" in fp_lower:
-        # Sibling project artifact pulled in but not declared → review.
-        if primary_source and Path(primary_source).parent.name.lower() in fp_lower:
-            return "none"  # within the artifact's own directory
+        # Check if the read is within the artifact's own directory tree (not substring match).
+        if primary_source:
+            try:
+                primary_dir = Path(primary_source).parent
+                Path(file_path).relative_to(primary_dir)
+                return "none"  # confirmed same directory
+            except (ValueError, TypeError):
+                pass  # different directory, continue leak detection
         return "cross-reference"
     return "none"
 
@@ -103,6 +115,27 @@ def analyze_dependencies(
     artifact_source: dict[str, str] | None = None,
 ) -> list[ArtifactDependencyReport]:
     artifact_source = artifact_source or {}
+
+    # Deduplication for resumed/compacted sessions (spec §1.0 Corner Cases).
+    # Remove duplicate read events before building the causal graph.
+    seen = set()
+    deduped_events = []
+    for e in events:
+        if _is_read(e):
+            fp = e.metadata.get("file_path", "")
+            if e.uuid:
+                dedup_key = (e.uuid, fp)
+            elif e.prompt_id:
+                dedup_key = (e.prompt_id, fp, e.session_id)
+            else:
+                dedup_key = (e.session_id, e.timestamp, fp)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+        deduped_events.append(e)
+
+    events = deduped_events
+
     children_of: dict[str, list[TranscriptEvent]] = defaultdict(list)
     same_line: dict[str, list[TranscriptEvent]] = defaultdict(list)
     for e in events:
@@ -189,7 +222,7 @@ def analyze_dependencies(
     return sorted(reports, key=lambda r: r.avg_overhead_tokens, reverse=True)
 
 
-def _cooccurrence(name: str, invs, events) -> dict:
+def _cooccurrence(name: str, invs: list[TranscriptEvent], events: list[TranscriptEvent]) -> dict[str, float]:
     """Fraction of the artifact's sessions in which each file was also read.
 
     Aggregate / correlation only — does not imply causation, and cannot resolve

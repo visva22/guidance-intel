@@ -238,6 +238,12 @@ def _detect_exclusion_violations(
     # Confidence ranking, so the file's headline classification reflects its
     # strongest single access.
     conf_rank = {"high": 3, "medium": 2, "low": 1, "none": 0}
+    # Priority for classification types (autonomous violations are most important).
+    classification_priority = {"autonomous": 3, "system": 2, "uncertain": 1, "user_requested": 0, "unknown": 0}
+
+    # Deduplication for resumed/compacted sessions (spec §1.0 Corner Cases).
+    # Prefer uuid-based dedup; fall back to (file_path, prompt_id) for generic JSONL.
+    seen = set()
 
     for event in events:
         # Only Read events carry a file_path; user_message events set manual_reference-less metadata.
@@ -246,6 +252,18 @@ def _detect_exclusion_violations(
         file_path = event.metadata.get("file_path", "")
         if not file_path:
             continue
+
+        # Dedup: prefer uuid, fall back to (file_path, prompt_id), then (session_id, timestamp, file_path)
+        if event.uuid:
+            dedup_key = (event.uuid, file_path)
+        elif event.prompt_id:
+            dedup_key = (event.prompt_id, file_path, event.session_id)
+        else:
+            dedup_key = (event.session_id, event.timestamp, file_path)
+
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
 
         full_path = Path(repo_path) / file_path
 
@@ -285,16 +303,17 @@ def _detect_exclusion_violations(
         elif result.classification == "uncertain":
             v["uncertain_count"] += 1
 
-        # Headline = the most-confident autonomous access if any, else strongest overall.
+        # Headline = the highest-priority classification, then most confident.
+        # Prioritizes: autonomous > system > uncertain > user_requested/unknown.
         if v["best"] is None:
             v["best"] = result
         else:
             cur = v["best"]
-            # Prefer autonomous (the real violation signal), then higher confidence.
-            cur_is_auto = cur.classification == "autonomous"
-            new_is_auto = result.classification == "autonomous"
-            if (new_is_auto and not cur_is_auto) or (
-                new_is_auto == cur_is_auto and conf_rank[result.confidence] > conf_rank[cur.confidence]
+            cur_priority = classification_priority.get(cur.classification, 0)
+            new_priority = classification_priority.get(result.classification, 0)
+            # Replace if higher priority, or same priority with higher confidence.
+            if new_priority > cur_priority or (
+                new_priority == cur_priority and conf_rank[result.confidence] > conf_rank[cur.confidence]
             ):
                 v["best"] = result
 
