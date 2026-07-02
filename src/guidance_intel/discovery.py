@@ -138,35 +138,29 @@ DISCOVERY_PATTERNS = {
     ],
 }
 
-# Transcript patterns by platform
-TRANSCRIPT_PATTERNS = {
-    "claude": [
-        ("~/.claude/projects/{project}/*.jsonl", "direct"),
-        ("~/.claude/projects/{project}/sessions/*/transcript.jsonl", "sessions"),
-    ],
-    "langchain": [
-        (".langchain/*.jsonl", "direct"),
-        (".langchain/sessions/*.jsonl", "direct"),
-        ("~/.langchain/*.jsonl", "direct"),
-        ("~/.langchain/sessions/*.jsonl", "direct"),
-    ],
-    "crewai": [
-        (".crewai/*.jsonl", "direct"),
-        (".crewai/sessions/*.jsonl", "direct"),
-        (".crewai/logs/*.jsonl", "direct"),
-        ("~/.crewai/*.jsonl", "direct"),
-        ("~/.crewai/sessions/*.jsonl", "direct"),
-        ("~/.crewai/logs/*.jsonl", "direct"),
-    ],
-    "generic": [
-        (".sessions/**/*.jsonl", "direct"),
-        ("sessions/**/*.jsonl", "direct"),
-        (".transcripts/**/*.jsonl", "direct"),
-        ("transcripts/**/*.jsonl", "direct"),
-        (".logs/**/*.jsonl", "direct"),
-        ("logs/**/*.jsonl", "direct"),
-    ],
-}
+# Generic transcript location patterns
+# Transcripts can be in:
+# 1. Home directory: ~/.*/projects/{project}/*.jsonl (Claude Code, etc.)
+# 2. Home directory: ~/.*/sessions/*.jsonl (LangChain, CrewAI, etc.)
+# 3. Repo-local: .*/sessions/*.jsonl, .*/logs/*.jsonl
+# 4. Generic: sessions/, transcripts/, logs/
+TRANSCRIPT_LOCATIONS = [
+    # Home directory patterns (any dotfolder)
+    ("~/.*/sessions/**/*.jsonl", "home"),
+    ("~/.*/logs/**/*.jsonl", "home"),
+    ("~/.*/transcripts/**/*.jsonl", "home"),
+    ("~/.*/projects/**/*.jsonl", "home"),  # Claude Code style
+
+    # Repo-local patterns (any dotfolder)
+    (".*/sessions/**/*.jsonl", "local"),
+    (".*/logs/**/*.jsonl", "local"),
+    (".*/transcripts/**/*.jsonl", "local"),
+
+    # Generic no-dotfolder
+    ("sessions/**/*.jsonl", "generic"),
+    ("transcripts/**/*.jsonl", "generic"),
+    ("logs/**/*.jsonl", "generic"),
+]
 
 
 def discover_artifacts(repo_path: str) -> list[Artifact]:
@@ -195,7 +189,7 @@ def discover_artifacts(repo_path: str) -> list[Artifact]:
 
 
 def discover_transcripts(repo_path: str, transcripts_path: str | None = None) -> list[str]:
-    """Auto-discover transcript files from all AI assistants.
+    """Auto-discover transcript files from all AI assistants using generic patterns.
 
     Args:
         repo_path: Absolute path to repository root.
@@ -209,42 +203,67 @@ def discover_transcripts(repo_path: str, transcripts_path: str | None = None) ->
 
     transcripts = []
     seen = set()
-
-    # Check Claude Code transcripts
-    claude_transcripts = _discover_claude_transcripts(repo_path)
-    for t in claude_transcripts:
-        if t not in seen:
-            seen.add(t)
-            transcripts.append(t)
-
-    # Check LangChain transcripts
     repo_root = Path(repo_path)
-    for base_dir in [repo_root / ".langchain", Path.home() / ".langchain"]:
-        if base_dir.exists():
-            for sessions_dir in [base_dir / "sessions", base_dir]:
+    home = Path.home()
+
+    # 1. Check home directory for any dotfolder with sessions/logs/transcripts/projects
+    # Pattern: ~/.*/sessions/, ~/.*/logs/, ~/.*/projects/
+    for dotfolder in home.glob(".*"):
+        if not dotfolder.is_dir():
+            continue
+        # Skip non-AI dotfolders
+        if dotfolder.name in {".git", ".vscode", ".idea", ".DS_Store", ".Trash"}:
+            continue
+
+        # Check for sessions/, logs/, transcripts/ subdirectories
+        for subdir_name in ["sessions", "logs", "transcripts"]:
+            subdir = dotfolder / subdir_name
+            if subdir.exists():
+                for jsonl_file in subdir.rglob("*.jsonl"):
+                    if jsonl_file.is_file() and str(jsonl_file) not in seen:
+                        seen.add(str(jsonl_file))
+                        transcripts.append(str(jsonl_file))
+
+        # Check for projects/ directory (Claude Code style)
+        projects_dir = dotfolder / "projects"
+        if projects_dir.exists():
+            # Find project directory matching this repo
+            project_dir = _find_project_dir_in_projects(projects_dir, repo_path)
+            if project_dir:
+                # Direct JSONL files
+                for jsonl_file in project_dir.glob("*.jsonl"):
+                    if jsonl_file.is_file() and str(jsonl_file) not in seen:
+                        seen.add(str(jsonl_file))
+                        transcripts.append(str(jsonl_file))
+                # Sessions subdirectory
+                sessions_dir = project_dir / "sessions"
                 if sessions_dir.exists():
-                    for jsonl_file in sorted(sessions_dir.glob("*.jsonl")):
-                        if jsonl_file.is_file() and str(jsonl_file) not in seen:
-                            seen.add(str(jsonl_file))
-                            transcripts.append(str(jsonl_file))
+                    for session_dir in sessions_dir.iterdir():
+                        transcript = session_dir / "transcript.jsonl"
+                        if transcript.exists() and str(transcript) not in seen:
+                            seen.add(str(transcript))
+                            transcripts.append(str(transcript))
 
-    # Check CrewAI transcripts
-    for base_dir in [repo_root / ".crewai", Path.home() / ".crewai"]:
-        if base_dir.exists():
-            for subdir_name in ["sessions", "logs", "."]:
-                subdir = base_dir / subdir_name if subdir_name != "." else base_dir
-                if subdir.exists():
-                    for jsonl_file in sorted(subdir.glob("*.jsonl")):
-                        if jsonl_file.is_file() and str(jsonl_file) not in seen:
-                            seen.add(str(jsonl_file))
-                            transcripts.append(str(jsonl_file))
+    # 2. Check repo-local dotfolders for sessions/logs/transcripts
+    for dotfolder in repo_root.glob(".*"):
+        if not dotfolder.is_dir():
+            continue
+        if dotfolder.name in {".git", ".vscode", ".idea", ".DS_Store"}:
+            continue
 
-    # Generic fallback
-    common_transcript_dirs = [".sessions", "sessions", ".transcripts", "transcripts", ".logs", "logs"]
-    for dir_name in common_transcript_dirs:
+        for subdir_name in ["sessions", "logs", "transcripts"]:
+            subdir = dotfolder / subdir_name
+            if subdir.exists():
+                for jsonl_file in subdir.rglob("*.jsonl"):
+                    if jsonl_file.is_file() and str(jsonl_file) not in seen:
+                        seen.add(str(jsonl_file))
+                        transcripts.append(str(jsonl_file))
+
+    # 3. Check generic no-dotfolder directories
+    for dir_name in ["sessions", "transcripts", "logs"]:
         transcript_dir = repo_root / dir_name
-        if transcript_dir.exists() and transcript_dir.is_dir():
-            for jsonl_file in sorted(transcript_dir.glob("*.jsonl")):
+        if transcript_dir.exists():
+            for jsonl_file in transcript_dir.rglob("*.jsonl"):
                 if jsonl_file.is_file() and str(jsonl_file) not in seen:
                     seen.add(str(jsonl_file))
                     transcripts.append(str(jsonl_file))
@@ -504,39 +523,14 @@ def _parse_agents_md(path: Path) -> list[str]:
     return agents
 
 
-def _discover_claude_transcripts(repo_path: str) -> list[str]:
-    """Discover Claude Code transcripts."""
-    transcripts = []
+def _find_project_dir_in_projects(projects_dir: Path, repo_path: str) -> Path | None:
+    """Find the project directory for the given repo in a projects/ folder.
 
-    claude_dir = Path.home() / ".claude" / "projects"
-    if not claude_dir.exists():
-        return transcripts
-
-    project_dir = _find_claude_project_dir(claude_dir, repo_path)
-    if not project_dir:
-        return transcripts
-
-    # UUID-named JSONL files directly in project folder
-    for jsonl_file in sorted(project_dir.glob("*.jsonl")):
-        if jsonl_file.is_file():
-            transcripts.append(str(jsonl_file))
-
-    # Legacy sessions/ subdirectory structure
-    sessions_dir = project_dir / "sessions"
-    if sessions_dir.exists():
-        for session_dir in sorted(sessions_dir.iterdir()):
-            transcript = session_dir / "transcript.jsonl"
-            if transcript.exists():
-                transcripts.append(str(transcript))
-
-    return transcripts
-
-
-def _find_claude_project_dir(claude_dir: Path, repo_path: str) -> Path | None:
-    """Find the Claude project directory for the given repo."""
+    Works with any AI assistant that uses projects/{project-hash-or-name}/ structure.
+    """
     abs_path = os.path.abspath(repo_path)
 
-    for project_dir in claude_dir.iterdir():
+    for project_dir in projects_dir.iterdir():
         if not project_dir.is_dir():
             continue
         if project_dir.name.startswith("."):
@@ -551,19 +545,20 @@ def _find_claude_project_dir(claude_dir: Path, repo_path: str) -> Path | None:
             except (OSError, json.JSONDecodeError):
                 pass
 
+    # Fallback: try common hash/naming patterns
     path_hash = hashlib.sha256(abs_path.encode()).hexdigest()[:16]
-    candidate = claude_dir / path_hash
+    candidate = projects_dir / path_hash
     if candidate.exists():
         return candidate
 
     safe_name = abs_path.replace("/", "-").strip("-")
-    candidate = claude_dir / safe_name
+    candidate = projects_dir / safe_name
     if candidate.exists():
         return candidate
 
-    # Also check with leading hyphen (Claude Code stores projects as -Users-...-project-name)
+    # Also check with leading hyphen (Claude Code style: -Users-...-project-name)
     safe_name_with_hyphen = "-" + safe_name
-    candidate = claude_dir / safe_name_with_hyphen
+    candidate = projects_dir / safe_name_with_hyphen
     if candidate.exists():
         return candidate
 
