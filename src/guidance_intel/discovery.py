@@ -211,7 +211,11 @@ def discover_transcripts(repo_path: str, transcripts_path: str | None = None) ->
     seen = set()
 
     # Check Claude Code transcripts
-    transcripts.extend(_discover_claude_transcripts(repo_path))
+    claude_transcripts = _discover_claude_transcripts(repo_path)
+    for t in claude_transcripts:
+        if t not in seen:
+            seen.add(t)
+            transcripts.append(t)
 
     # Check LangChain transcripts
     repo_root = Path(repo_path)
