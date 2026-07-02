@@ -120,27 +120,24 @@ def _discover_skills(root: Path) -> list[Artifact]:
 
             artifacts.append(Artifact(name=name, kind="skill", source_path=source, triggers=triggers))
 
-    # Pattern 2: .agents/skills/**/*.md (custom agent frameworks)
-    agents_skills_pattern = [root / ".agents" / "skills"]
-    for base_dir in agents_skills_pattern:
-        if base_dir.exists():
-            for md_file in sorted(base_dir.rglob("*.md")):
-                if md_file.is_file():
-                    # Use parent directory name if file is SKILL.md, otherwise use filename
-                    if md_file.name == "SKILL.md":
-                        name = md_file.parent.name
-                    else:
-                        name = md_file.stem
+    # Pattern 2: .agents/skills/**/SKILL.md (custom agent frameworks)
+    # Only discover SKILL.md files; other .md files in skill dirs are references/metadata
+    agents_skills_dir = root / ".agents" / "skills"
+    if agents_skills_dir.exists():
+        for skill_md in sorted(agents_skills_dir.rglob("SKILL.md")):
+            if skill_md.is_file():
+                # Use parent directory name as skill name
+                name = skill_md.parent.name
 
-                    if name in seen_names:
-                        continue
-                    seen_names.add(name)
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
 
-                    source = str(md_file.relative_to(root))
-                    triggers = [name, f"/{name}"]
-                    triggers.extend(_extract_triggers_from_file(md_file))
+                source = str(skill_md.relative_to(root))
+                triggers = [name, f"/{name}"]
+                triggers.extend(_extract_triggers_from_file(skill_md))
 
-                    artifacts.append(Artifact(name=name, kind="skill", source_path=source, triggers=triggers))
+                artifacts.append(Artifact(name=name, kind="skill", source_path=source, triggers=triggers))
 
     # Pattern 3: skills/**/*.md (generic skills directory)
     skills_root = root / "skills"

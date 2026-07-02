@@ -47,3 +47,17 @@ def test_finds_transcript_files(repo_path, transcripts_path):
 def test_no_transcripts_without_path(tmp_path):
     paths = discover_transcripts(str(tmp_path), None)
     assert paths == []
+
+
+def test_excludes_reference_files(repo_path):
+    """Reference files in references/ subdirs should not be discovered as skills."""
+    artifacts = discover_artifacts(repo_path)
+    skill_names = [a.name for a in artifacts if a.kind == "skill"]
+
+    # SKILL.md should be discovered
+    assert "test-skill" in skill_names
+
+    # But references/ files should NOT
+    assert "build-commands" not in skill_names
+    assert "TEST_PLAN" not in skill_names
+    assert "VALIDATION_REPORT" not in skill_names
